@@ -37,8 +37,10 @@ static settings_t      s_settings = {
     .perlin_speed_c100 = 100,   // 1.00 noise-units/s
     .perlin_octaves    = 3,
     .pal_colors        = { 0x000000, 0xFFFFFF, 0x000000, 0x000000 },
+    .pal_pos           = { 0, 255, 128, 192 },
     .pal_n             = 2,     // black → white
     .pal_bright        = 255,
+    .pal_blend         = 0,     // linear
 };
 static SemaphoreHandle_t s_mutex;
 static QueueHandle_t     s_forward_queue; // queue of settings_t to forward
@@ -53,7 +55,8 @@ void settings_encode(const settings_t *s, char *buf, int buf_size) {
              "flash=%d&period=%lu&duty=%u&r=%u&g=%u&b=%u"
              "&mode=%u&speriod=%lu&sangle=%ld&sspeed=%ld"
              "&pscale=%lu&pspeed=%ld&poct=%u"
-             "&p0=%lu&p1=%lu&p2=%lu&p3=%lu&pc=%u&pbr=%u",
+             "&p0=%lu&p1=%lu&p2=%lu&p3=%lu&pc=%u&pbr=%u"
+             "&pp0=%u&pp1=%u&pp2=%u&pp3=%u&pbl=%u",
              s->flash_enabled ? 1 : 0,
              (unsigned long)s->period_ms,
              (unsigned)s->duty_percent,
@@ -67,7 +70,10 @@ void settings_encode(const settings_t *s, char *buf, int buf_size) {
              (unsigned)s->perlin_octaves,
              (unsigned long)s->pal_colors[0], (unsigned long)s->pal_colors[1],
              (unsigned long)s->pal_colors[2], (unsigned long)s->pal_colors[3],
-             (unsigned)s->pal_n, (unsigned)s->pal_bright);
+             (unsigned)s->pal_n, (unsigned)s->pal_bright,
+             (unsigned)s->pal_pos[0], (unsigned)s->pal_pos[1],
+             (unsigned)s->pal_pos[2], (unsigned)s->pal_pos[3],
+             (unsigned)s->pal_blend);
 }
 
 bool settings_decode(const char *body, settings_t *out) {
@@ -149,6 +155,19 @@ bool settings_decode(const char *body, settings_t *out) {
 
     p = strstr(body, "pbr=");
     if (p) out->pal_bright = (uint8_t)strtoul(p + 4, NULL, 10);
+
+    // Palette stop positions pp0..pp3
+    for (int i = 0; i < 4; i++) {
+        char key[5] = { 'p', 'p', (char)('0' + i), '=', '\0' };
+        p = strstr(body, key);
+        if (p) out->pal_pos[i] = (uint8_t)strtoul(p + 4, NULL, 10);
+    }
+
+    p = strstr(body, "pbl=");
+    if (p) {
+        uint8_t v = (uint8_t)strtoul(p + 4, NULL, 10);
+        if (v <= 3) out->pal_blend = v;
+    }
 
     return true;
 }
@@ -232,24 +251,64 @@ void settings_apply_and_forward(const settings_t *s) {
 static uint8_t s_pattern_buf[MAX_LEDS * 3];
 
 // Interpolate a colour from the palette for a given brightness t ∈ [0, 1].
+// positions[i] are 0–255 values giving each stop's location along the gradient.
+// blend: 0=linear, 1=nearest, 2=cosine, 3=step (jump at stop boundary).
 // Applies pal_bright as an overall dimmer.
-static void palette_lookup(float t, const uint32_t *colors, int n,
-                            float bright_scale,
+static void palette_lookup(float t, const uint32_t *colors, const uint8_t *positions,
+                            int n, uint8_t blend, float bright_scale,
                             uint8_t *r, uint8_t *g, uint8_t *b) {
     if (n <= 0) { *r = *g = *b = 0; return; }
+    if (n == 1) {
+        uint32_t c = colors[0];
+        *r = (uint8_t)(((c >> 16) & 0xFF) * bright_scale);
+        *g = (uint8_t)(((c >>  8) & 0xFF) * bright_scale);
+        *b = (uint8_t)(( c        & 0xFF) * bright_scale);
+        return;
+    }
     if (t < 0.0f) t = 0.0f;
     if (t > 1.0f) t = 1.0f;
-    float pos = t * (float)(n - 1);
-    int idx = (int)pos;
-    if (idx >= n - 1) idx = n - 2;
-    float frac = pos - (float)idx;
-    uint32_t c0 = colors[idx], c1 = (n > 1) ? colors[idx + 1] : colors[idx];
-    float r0 = (float)((c0 >> 16) & 0xFF), r1 = (float)((c1 >> 16) & 0xFF);
-    float g0 = (float)((c0 >>  8) & 0xFF), g1 = (float)((c1 >>  8) & 0xFF);
-    float b0 = (float)( c0        & 0xFF), b1 = (float)( c1        & 0xFF);
-    *r = (uint8_t)((r0 + (r1 - r0) * frac) * bright_scale);
-    *g = (uint8_t)((g0 + (g1 - g0) * frac) * bright_scale);
-    *b = (uint8_t)((b0 + (b1 - b0) * frac) * bright_scale);
+    float ft = t * 255.0f;
+
+    // Find which segment t falls in
+    int idx = 0;
+    for (int i = 0; i < n - 2; i++) {
+        if (ft >= (float)positions[i + 1]) idx = i + 1;
+        else break;
+    }
+
+    uint32_t picked;
+    if (blend == 1) {
+        // Nearest: pick whichever stop is closer
+        float seg_start = (float)positions[idx];
+        float seg_end   = (float)positions[idx + 1];
+        float mid = (seg_start + seg_end) * 0.5f;
+        picked = (ft < mid) ? colors[idx] : colors[idx + 1];
+    } else if (blend == 3) {
+        // Step: jump to next color exactly at the stop boundary
+        picked = colors[idx];
+    } else {
+        float seg_start = (float)positions[idx];
+        float seg_end   = (float)positions[idx + 1];
+        float frac = (seg_end > seg_start) ? (ft - seg_start) / (seg_end - seg_start) : 0.0f;
+        if (frac < 0.0f) frac = 0.0f;
+        if (frac > 1.0f) frac = 1.0f;
+        if (blend == 2) {
+            // Cosine (smoothstep S-curve)
+            frac = (1.0f - cosf(frac * (float)M_PI)) * 0.5f;
+        }
+        // blend == 0: linear (frac unchanged)
+        uint32_t c0 = colors[idx], c1 = colors[idx + 1];
+        float r0 = (float)((c0 >> 16) & 0xFF), r1 = (float)((c1 >> 16) & 0xFF);
+        float g0 = (float)((c0 >>  8) & 0xFF), g1 = (float)((c1 >>  8) & 0xFF);
+        float b0 = (float)( c0        & 0xFF), b1 = (float)( c1        & 0xFF);
+        *r = (uint8_t)((r0 + (r1 - r0) * frac) * bright_scale);
+        *g = (uint8_t)((g0 + (g1 - g0) * frac) * bright_scale);
+        *b = (uint8_t)((b0 + (b1 - b0) * frac) * bright_scale);
+        return;
+    }
+    *r = (uint8_t)(((picked >> 16) & 0xFF) * bright_scale);
+    *g = (uint8_t)(((picked >>  8) & 0xFF) * bright_scale);
+    *b = (uint8_t)(( picked        & 0xFF) * bright_scale);
 }
 
 static void flash_task(void *arg) {
@@ -295,7 +354,7 @@ static void flash_task(void *arg) {
                 } else {
                     t = perlin_sample(x, y, time_s, scale_mm, speed, octaves) / 255.0f;
                 }
-                palette_lookup(t, cur.pal_colors, (int)cur.pal_n, bright_scale,
+                palette_lookup(t, cur.pal_colors, cur.pal_pos, (int)cur.pal_n, cur.pal_blend, bright_scale,
                                &s_pattern_buf[i*3+0],
                                &s_pattern_buf[i*3+1],
                                &s_pattern_buf[i*3+2]);

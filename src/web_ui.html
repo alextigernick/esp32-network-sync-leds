@@ -94,7 +94,16 @@
     }
     .pal-stop label { color:#888; font-size:.8rem; min-width:3.5rem; }
     .pal-stop .btn-rm { width:auto; padding:.15rem .5rem; font-size:.75rem; margin:0; }
-    #pal-gradient { width:100%; height:22px; border-radius:5px; margin:.6rem 0; border:1px solid #333; }
+    #pal-gradient-wrap { position:relative; width:100%; margin:.6rem 0; }
+    #pal-gradient { width:100%; height:22px; border-radius:5px; border:1px solid #333; display:block; }
+    .pal-handle {
+      position:absolute; bottom:-1px; width:12px; height:12px;
+      background:#fff; border:2px solid #555; border-radius:2px;
+      transform:translateX(-50%) rotate(45deg);
+      cursor:ew-resize; touch-action:none;
+      transition: border-color .1s;
+    }
+    .pal-handle:hover, .pal-handle.dragging { border-color:#4af; }
     .card.grid-card { width: auto; min-width: 280px; max-width: 90vw; }
     .grid-inp {
       width: 4.5rem; padding: .3rem .4rem;
@@ -275,7 +284,18 @@
                oninput="document.getElementById('pal-bright-val').textContent=Math.round(this.value/2.55)+'%'; scheduleSettingsPush()">
         <span class="val" id="pal-bright-val">100%</span>
       </div>
-      <div id="pal-gradient"></div>
+      <div class="row">
+        <label>Blend</label>
+        <select id="pal-blend-sel" onchange="scheduleSettingsPush()" style="flex:1">
+          <option value="0">Linear</option>
+          <option value="2">Cosine</option>
+          <option value="1">Nearest</option>
+          <option value="3">Step</option>
+        </select>
+      </div>
+      <div id="pal-gradient-wrap">
+        <div id="pal-gradient"></div>
+      </div>
       <div id="pal-stops"></div>
       <button class="btn-off" id="pal-add-btn" onclick="addPalStop()"
               style="margin-top:.5rem;padding:.35rem">+ Add Stop</button>
@@ -455,6 +475,11 @@
     };
 
     let palStops = ['#000000', '#ffffff'];
+    let palPositions = [0, 1]; // 0.0–1.0 per stop
+
+    function defaultPositions(n) {
+      return Array.from({length: n}, (_, i) => n === 1 ? 0 : i / (n - 1));
+    }
 
     function hexToPacked(hex) {
       const n = parseInt(hex.slice(1), 16);
@@ -467,12 +492,66 @@
 
     function renderPalGradient() {
       const el = document.getElementById('pal-gradient');
+      const wrap = document.getElementById('pal-gradient-wrap');
+
       if (palStops.length === 1) {
         el.style.background = palStops[0];
       } else {
-        const pct = palStops.map((c, i) => `${c} ${Math.round(i / (palStops.length - 1) * 100)}%`);
+        const pct = palStops.map((c, i) => `${c} ${Math.round(palPositions[i] * 100)}%`);
         el.style.background = `linear-gradient(to right, ${pct.join(', ')})`;
       }
+
+      // Rebuild handles for inner stops (not first/last)
+      wrap.querySelectorAll('.pal-handle').forEach(h => h.remove());
+      palPositions.forEach((pos, i) => {
+        if (i === 0 || i === palStops.length - 1) return;
+        const handle = document.createElement('div');
+        handle.className = 'pal-handle';
+        handle.style.left = (pos * 100) + '%';
+        handle.dataset.idx = i;
+        attachHandleDrag(handle);
+        wrap.appendChild(handle);
+      });
+    }
+
+    function attachHandleDrag(handle) {
+      let startX, startPos;
+      function onMove(e) {
+        const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+        const wrap = document.getElementById('pal-gradient-wrap');
+        const rect = wrap.getBoundingClientRect();
+        const idx = +handle.dataset.idx;
+        const minPos = palPositions[idx - 1] + 0.01;
+        const maxPos = palPositions[idx + 1] - 0.01;
+        let pos = (clientX - rect.left) / rect.width;
+        pos = Math.max(minPos, Math.min(maxPos, pos));
+        palPositions[idx] = pos;
+        handle.style.left = (pos * 100) + '%';
+        // Update gradient without rebuilding handles
+        const pct = palStops.map((c, i) => `${c} ${Math.round(palPositions[i] * 100)}%`);
+        document.getElementById('pal-gradient').style.background = `linear-gradient(to right, ${pct.join(', ')})`;
+        document.getElementById('pal-preset').value = '';
+        scheduleSettingsPush();
+      }
+      function onUp() {
+        handle.classList.remove('dragging');
+        window.removeEventListener('mousemove', onMove);
+        window.removeEventListener('mouseup', onUp);
+        window.removeEventListener('touchmove', onMove);
+        window.removeEventListener('touchend', onUp);
+      }
+      handle.addEventListener('mousedown', e => {
+        e.preventDefault();
+        handle.classList.add('dragging');
+        window.addEventListener('mousemove', onMove);
+        window.addEventListener('mouseup', onUp);
+      });
+      handle.addEventListener('touchstart', e => {
+        e.preventDefault();
+        handle.classList.add('dragging');
+        window.addEventListener('touchmove', onMove, {passive: false});
+        window.addEventListener('touchend', onUp);
+      }, {passive: false});
     }
 
     function renderPalStops() {
@@ -486,6 +565,12 @@
           `<input type="color" value="${hex}"` +
           ` oninput="palStops[${i}]=this.value; renderPalGradient();` +
           ` document.getElementById('pal-preset').value=''; scheduleSettingsPush()">` +
+          (i > 0
+            ? `<button class="btn-off btn-rm" onclick="movePalStop(${i},-1)" title="Move up">↑</button>`
+            : '<button class="btn-off btn-rm" style="visibility:hidden">↑</button>') +
+          (i < palStops.length - 1
+            ? `<button class="btn-off btn-rm" onclick="movePalStop(${i},1)" title="Move down">↓</button>`
+            : '<button class="btn-off btn-rm" style="visibility:hidden">↓</button>') +
           (palStops.length > 1
             ? `<button class="btn-off btn-rm" onclick="removePalStop(${i})">✕</button>`
             : '');
@@ -497,7 +582,15 @@
 
     function addPalStop() {
       if (palStops.length >= 4) return;
-      palStops.push('#ffffff');
+      // Insert new stop in the middle of the largest gap
+      let bestGap = -1, bestIdx = palStops.length - 1;
+      for (let i = 0; i < palPositions.length - 1; i++) {
+        const gap = palPositions[i + 1] - palPositions[i];
+        if (gap > bestGap) { bestGap = gap; bestIdx = i; }
+      }
+      const newPos = (palPositions[bestIdx] + palPositions[bestIdx + 1]) / 2;
+      palStops.splice(bestIdx + 1, 0, '#ffffff');
+      palPositions.splice(bestIdx + 1, 0, newPos);
       document.getElementById('pal-preset').value = '';
       renderPalStops();
       scheduleSettingsPush();
@@ -506,6 +599,20 @@
     function removePalStop(i) {
       if (palStops.length <= 1) return;
       palStops.splice(i, 1);
+      palPositions.splice(i, 1);
+      // Clamp endpoints
+      palPositions[0] = 0;
+      palPositions[palPositions.length - 1] = 1;
+      document.getElementById('pal-preset').value = '';
+      renderPalStops();
+      scheduleSettingsPush();
+    }
+
+    function movePalStop(i, dir) {
+      const j = i + dir;
+      if (j < 0 || j >= palStops.length) return;
+      [palStops[i], palStops[j]] = [palStops[j], palStops[i]];
+      // Keep positions sorted: swap colors only, positions stay in place
       document.getElementById('pal-preset').value = '';
       renderPalStops();
       scheduleSettingsPush();
@@ -514,6 +621,7 @@
     function applyPreset(name) {
       if (!name || !PRESETS[name]) return;
       palStops = [...PRESETS[name]];
+      palPositions = defaultPositions(palStops.length);
       renderPalStops();
       scheduleSettingsPush();
     }
@@ -522,9 +630,13 @@
       const n = s.pal_n || 1;
       const raw = [s.pal0, s.pal1, s.pal2, s.pal3];
       palStops = raw.slice(0, n).map(v => packedToHex(v || 0));
+      const rawPos = [s.palp0, s.palp1, s.palp2, s.palp3];
+      palPositions = rawPos.slice(0, n).map((v, i) =>
+        v !== undefined ? v / 255 : (n === 1 ? 0 : i / (n - 1)));
       document.getElementById('pal-bright-sl').value = s.pal_bright ?? 255;
       document.getElementById('pal-bright-val').textContent =
         Math.round((s.pal_bright ?? 255) / 2.55) + '%';
+      document.getElementById('pal-blend-sel').value = s.pal_blend ?? 0;
       renderPalStops();
     }
 
@@ -545,9 +657,11 @@
       // Palette (all 4 slots always sent; unused slots default to 0)
       const pc  = palStops.length;
       const pbr = document.getElementById('pal-bright-sl').value;
-      let palStr = `&pc=${pc}&pbr=${pbr}`;
+      const pbl = document.getElementById('pal-blend-sel').value;
+      let palStr = `&pc=${pc}&pbr=${pbr}&pbl=${pbl}`;
       for (let i = 0; i < 4; i++) {
         palStr += `&p${i}=${i < palStops.length ? hexToPacked(palStops[i]) : 0}`;
+        palStr += `&pp${i}=${i < palPositions.length ? Math.round(palPositions[i] * 255) : (i === 0 ? 0 : 255)}`;
       }
       const url = forward ? '/settings' : '/settings?fwd=0';
       await fetch(url, {

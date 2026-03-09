@@ -144,6 +144,8 @@ static esp_err_t handle_state(httpd_req_t *req) {
       ",\"perlin_scale_mm10\":%lu,\"perlin_speed_c100\":%ld,\"perlin_octaves\":%u"
       ",\"pal_n\":%u,\"pal_bright\":%u"
       ",\"pal0\":%lu,\"pal1\":%lu,\"pal2\":%lu,\"pal3\":%lu"
+      ",\"palp0\":%u,\"palp1\":%u,\"palp2\":%u,\"palp3\":%u"
+      ",\"pal_blend\":%u"
       ",\"peers\":[",
       s_led_on ? "true" : "false",
       (unsigned long long)sync_ms,
@@ -166,7 +168,10 @@ static esp_err_t handle_state(httpd_req_t *req) {
       (unsigned)cfg.perlin_octaves,
       (unsigned)cfg.pal_n, (unsigned)cfg.pal_bright,
       (unsigned long)cfg.pal_colors[0], (unsigned long)cfg.pal_colors[1],
-      (unsigned long)cfg.pal_colors[2], (unsigned long)cfg.pal_colors[3]);
+      (unsigned long)cfg.pal_colors[2], (unsigned long)cfg.pal_colors[3],
+      (unsigned)cfg.pal_pos[0], (unsigned)cfg.pal_pos[1],
+      (unsigned)cfg.pal_pos[2], (unsigned)cfg.pal_pos[3],
+      (unsigned)cfg.pal_blend);
 
     for (int i = 0; i < peer_count; i++) {
         A("%s{\"name\":\"%s\",\"ip\":\"%s\"}",

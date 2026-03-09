@@ -39,8 +39,10 @@ typedef struct {
     // Pattern brightness (0–1) is interpolated across pal_n colour stops.
     // pal_bright is an overall dimmer applied after lookup (0 = off, 255 = full).
     uint32_t pal_colors[4]; // packed 0x00RRGGBB, stops 0..pal_n-1
+    uint8_t  pal_pos[4];   // position of each stop along gradient, 0–255 (0=left, 255=right)
     uint8_t  pal_n;         // active stop count, 1–4
     uint8_t  pal_bright;    // overall brightness 0–255
+    uint8_t  pal_blend;     // 0=linear, 1=nearest, 2=cosine, 3=step
 } settings_t;
 
 // Return a snapshot of current settings.
