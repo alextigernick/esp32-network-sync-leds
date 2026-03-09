@@ -1,5 +1,6 @@
 #include "led.h"
 #include "config.h"
+#include "node_config.h"
 
 #include <string.h>
 #include "driver/rmt_tx.h"
@@ -17,9 +18,11 @@
 static rmt_channel_handle_t s_chan    = NULL;
 static rmt_encoder_handle_t s_encoder = NULL;
 
-// Pixel buffer in GRB order (WS2812B wire format)
-static uint8_t s_pixels[NUM_LEDS * 3];
-static uint8_t s_r = 255, s_g = 255, s_b = 255;
+// Pixel buffer in GRB order (WS2812B wire format).
+// Sized for the compile-time maximum; s_num_leds tracks the live count.
+static uint8_t   s_pixels[MAX_LEDS * 3];
+static uint16_t  s_num_leds = NUM_LEDS;
+static uint8_t   s_r = 255, s_g = 255, s_b = 255;
 
 void led_init(void) {
     rmt_tx_channel_config_t chan_cfg = {
@@ -41,30 +44,38 @@ void led_init(void) {
     ESP_ERROR_CHECK(rmt_new_bytes_encoder(&enc_cfg, &s_encoder));
     ESP_ERROR_CHECK(rmt_enable(s_chan));
 
+    s_num_leds = node_config_get_num_leds();
+
     // Clear strip on boot
-    memset(s_pixels, 0, sizeof(s_pixels));
+    memset(s_pixels, 0, s_num_leds * 3);
     rmt_transmit_config_t tx_cfg = { .loop_count = 0 };
-    ESP_ERROR_CHECK(rmt_transmit(s_chan, s_encoder, s_pixels, sizeof(s_pixels), &tx_cfg));
+    ESP_ERROR_CHECK(rmt_transmit(s_chan, s_encoder, s_pixels, s_num_leds * 3, &tx_cfg));
     rmt_tx_wait_all_done(s_chan, 50);
 
-    ESP_LOGI(TAG, "WS2812B ready: %d LEDs on GPIO %d", NUM_LEDS, LED_GPIO);
+    ESP_LOGI(TAG, "WS2812B ready: %u LEDs on GPIO %d", s_num_leds, LED_GPIO);
 }
 
 void led_set_rgb(uint8_t r, uint8_t g, uint8_t b) {
     s_r = r; s_g = g; s_b = b;
 }
 
+void led_set_count(uint16_t n) {
+    if (n < 1)        n = 1;
+    if (n > MAX_LEDS) n = MAX_LEDS;
+    s_num_leds = n;
+}
+
 void led_set(bool on) {
     if (on) {
-        for (int i = 0; i < NUM_LEDS; i++) {
+        for (int i = 0; i < s_num_leds; i++) {
             s_pixels[i * 3 + 0] = s_g; // GRB order
             s_pixels[i * 3 + 1] = s_r;
             s_pixels[i * 3 + 2] = s_b;
         }
     } else {
-        memset(s_pixels, 0, sizeof(s_pixels));
+        memset(s_pixels, 0, s_num_leds * 3);
     }
     rmt_transmit_config_t tx_cfg = { .loop_count = 0 };
     rmt_tx_wait_all_done(s_chan, 10);
-    rmt_transmit(s_chan, s_encoder, s_pixels, sizeof(s_pixels), &tx_cfg);
+    rmt_transmit(s_chan, s_encoder, s_pixels, s_num_leds * 3, &tx_cfg);
 }

@@ -135,6 +135,18 @@
     <div class="color-preview" id="color-preview"></div>
   </div>
 
+  <!-- Node config -->
+  <div class="card">
+    <h2>Node Config</h2>
+    <div class="row">
+      <label>Strip len</label>
+      <input type="number" id="num-leds-inp" min="1" max="500" value="8"
+             style="flex:1;padding:.4rem;background:#282828;color:#eee;border:1px solid #444;border-radius:6px;font-family:monospace;font-size:.9rem">
+      <span class="val" style="min-width:2rem">LEDs</span>
+    </div>
+    <button class="btn-off" style="margin-top:.6rem" onclick="saveNodeConfig()">Save</button>
+  </div>
+
   <!-- Peer navigator -->
   <div class="card">
     <h2>Other Nodes (<span id="peer-count">0</span> found)</h2>
@@ -371,8 +383,27 @@
       await fetchState();
     }
 
+    async function fetchNodeConfig() {
+      try {
+        const r = await fetch('/node_config');
+        if (!r.ok) return;
+        const s = await r.json();
+        document.getElementById('num-leds-inp').value = s.num_leds;
+      } catch (e) { console.warn('node_config fetch failed', e); }
+    }
+
+    async function saveNodeConfig() {
+      const n = document.getElementById('num-leds-inp').value;
+      await fetch('/node_config', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+        body: 'num_leds=' + n,
+      });
+    }
+
     updateColor();
     fetchState();
+    fetchNodeConfig();
     setInterval(fetchState, 3000);
   </script>
 </body>

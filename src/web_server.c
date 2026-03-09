@@ -1,5 +1,6 @@
 #include "web_server.h"
 #include "discovery.h"
+#include "node_config.h"
 #include "time_sync.h"
 #include "settings_sync.h"
 #include "config.h"
@@ -262,6 +263,38 @@ static esp_err_t handle_settings_post(httpd_req_t *req) {
     return ESP_OK;
 }
 
+// ---- /node_config GET --------------------------------------------------
+
+static esp_err_t handle_node_config_get(httpd_req_t *req) {
+    static char buf[32];
+    int len = snprintf(buf, sizeof(buf), "{\"num_leds\":%u}", node_config_get_num_leds());
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, buf, len);
+    return ESP_OK;
+}
+
+// ---- /node_config POST -------------------------------------------------
+
+static esp_err_t handle_node_config_post(httpd_req_t *req) {
+    char body[32] = {0};
+    int recv_len = req->content_len < (int)sizeof(body) - 1
+                   ? req->content_len : (int)sizeof(body) - 1;
+    if (recv_len > 0) httpd_req_recv(req, body, recv_len);
+
+    char *p = strstr(body, "num_leds=");
+    if (!p) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing num_leds");
+        return ESP_FAIL;
+    }
+    uint16_t n = (uint16_t)strtoul(p + 9, NULL, 10);
+    node_config_save_num_leds(n);
+    led_set_count(node_config_get_num_leds()); // apply immediately (clamped)
+
+    httpd_resp_set_status(req, "204 No Content");
+    httpd_resp_send(req, NULL, 0);
+    return ESP_OK;
+}
+
 // ---- start -------------------------------------------------------------
 
 void web_server_start(void) {
@@ -271,7 +304,7 @@ void web_server_start(void) {
     config.stack_size        = 8192;
     config.recv_wait_timeout = 30;
     config.send_wait_timeout = 10;
-    config.max_uri_handlers  = 10;
+    config.max_uri_handlers  = 12;
 
     ESP_LOGI(TAG, "Starting httpd...");
     httpd_handle_t server = NULL;
@@ -287,8 +320,10 @@ void web_server_start(void) {
         { .uri = "/led",        .method = HTTP_POST, .handler = handle_led_post   },
         { .uri = "/ota",        .method = HTTP_POST, .handler = handle_ota_post   },
         { .uri = "/ota/verify", .method = HTTP_POST, .handler = handle_ota_verify },
-        { .uri = "/settings",   .method = HTTP_GET,  .handler = handle_settings_get  },
-        { .uri = "/settings",   .method = HTTP_POST, .handler = handle_settings_post },
+        { .uri = "/settings",     .method = HTTP_GET,  .handler = handle_settings_get     },
+        { .uri = "/settings",     .method = HTTP_POST, .handler = handle_settings_post    },
+        { .uri = "/node_config",  .method = HTTP_GET,  .handler = handle_node_config_get  },
+        { .uri = "/node_config",  .method = HTTP_POST, .handler = handle_node_config_post },
     };
     for (int i = 0; i < (int)(sizeof(routes)/sizeof(routes[0])); i++) {
         httpd_register_uri_handler(server, &routes[i]);

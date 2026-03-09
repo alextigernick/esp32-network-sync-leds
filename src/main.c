@@ -1,5 +1,6 @@
 #include "config.h"
 #include "discovery.h"
+#include "node_config.h"
 #include "time_sync.h"
 #include "web_server.h"
 
@@ -139,6 +140,8 @@ void app_main(void) {
         ESP_ERROR_CHECK(nvs_flash_erase());
         ESP_ERROR_CHECK(nvs_flash_init());
     }
+
+    node_config_load();
 
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());

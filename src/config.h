@@ -7,9 +7,10 @@
 // AP address (fixed)
 #define AP_IP           "192.168.4.1"
 
-// WS2812B strip: data pin and length
+// WS2812B strip: data pin, default length, and hard maximum (sets pixel buffer size)
 #define LED_GPIO        20
-#define NUM_LEDS        8
+#define NUM_LEDS        8    // default; overridden at runtime by node_config
+#define MAX_LEDS        500  // compile-time buffer ceiling
 
 // UDP multicast group and port for peer discovery
 #define DISCOVERY_MCAST_ADDR  "239.0.0.1"
