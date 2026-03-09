@@ -18,7 +18,7 @@
 
 static peer_t s_peers[MAX_PEERS];
 static int    s_peer_count = 0;
-static SemaphoreHandle_t s_mutex;
+static SemaphoreHandle_t s_mutex = NULL;
 
 static char s_my_ip[16];
 static char s_my_name[PEER_NAME_LEN];
@@ -159,6 +159,7 @@ void discovery_start(const char *my_ip, const char *my_name) {
 }
 
 int discovery_get_peers(peer_t *out, int max) {
+    if (!s_mutex) return 0;
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     int n = s_peer_count < max ? s_peer_count : max;
     memcpy(out, s_peers, n * sizeof(peer_t));

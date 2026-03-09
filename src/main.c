@@ -157,7 +157,7 @@ void app_main(void) {
     ESP_LOGI(TAG, "Node name: %s", s_my_name);
 
     if (is_sta) {
-        time_sync_start_slave(AP_IP);
+        time_sync_start_elected(s_my_ip);
     } else {
         time_sync_start_master();
     }

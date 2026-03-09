@@ -1,5 +1,6 @@
 #include "time_sync.h"
 #include "config.h"
+#include "discovery.h"
 
 #include <string.h>
 #include <sys/socket.h>
@@ -131,4 +132,96 @@ static void slave_task(void *arg) {
 void time_sync_start_slave(const char *master_ip) {
     strncpy(s_master_ip, master_ip, 15);
     xTaskCreate(slave_task, "time_slave", 6144, NULL, 3, NULL);
+}
+
+// ---- elected slave (leader election) -----------------------------------
+
+static char s_my_ip[16];
+
+static uint32_t ip_to_u32(const char *ip) {
+    struct in_addr addr;
+    inet_aton(ip, &addr);
+    return ntohl(addr.s_addr);
+}
+
+// Try one sync round to the given IP. Returns true on success.
+static bool try_sync(int sock, const char *master_ip) {
+    struct sockaddr_in addr = {
+        .sin_family = AF_INET,
+        .sin_port   = htons(TIME_SYNC_PORT),
+    };
+    inet_aton(master_ip, &addr.sin_addr);
+
+    int64_t t0 = (int64_t)esp_timer_get_time();
+    sendto(sock, "REQ\n", 4, 0, (struct sockaddr *)&addr, sizeof(addr));
+
+    uint8_t resp[8];
+    int n = recv(sock, resp, 8, 0);
+    if (n != 8) return false;
+
+    int64_t t1 = (int64_t)esp_timer_get_time();
+    int64_t rtt_us = t1 - t0;
+
+    uint64_t master_ms =
+        ((uint64_t)resp[0] << 56) | ((uint64_t)resp[1] << 48) |
+        ((uint64_t)resp[2] << 40) | ((uint64_t)resp[3] << 32) |
+        ((uint64_t)resp[4] << 24) | ((uint64_t)resp[5] << 16) |
+        ((uint64_t)resp[6] <<  8) | ((uint64_t)resp[7]);
+
+    int64_t master_us = (int64_t)(master_ms * 1000) + rtt_us / 2;
+    int64_t local_us  = (t0 + t1) / 2;
+    s_offset_us = master_us - local_us;
+
+    ESP_LOGI(TAG, "Synced to %s. offset=%lld us, rtt=%lld us",
+             master_ip, (long long)s_offset_us, (long long)rtt_us);
+    return true;
+}
+
+static void elected_slave_task(void *arg) {
+    int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (sock < 0) { ESP_LOGE(TAG, "elected socket failed"); vTaskDelete(NULL); return; }
+
+    struct timeval tv = { .tv_sec = 2, .tv_usec = 0 };
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+    uint32_t my_u32 = ip_to_u32(s_my_ip);
+
+    while (1) {
+        // Elect: lowest IP among {AP_IP} ∪ {discovered peers} ∪ {self}
+        peer_t peers[MAX_PEERS];
+        int count = discovery_get_peers(peers, MAX_PEERS);
+
+        uint32_t best_u32 = ip_to_u32(AP_IP);
+        char best_ip[16];
+        strncpy(best_ip, AP_IP, sizeof(best_ip));
+
+        for (int i = 0; i < count; i++) {
+            uint32_t p = ip_to_u32(peers[i].ip);
+            if (p < best_u32) {
+                best_u32 = p;
+                strncpy(best_ip, peers[i].ip, sizeof(best_ip));
+            }
+        }
+
+        if (my_u32 <= best_u32) {
+            // Self is elected root — serve time, don't apply an offset
+            ESP_LOGI(TAG, "Elected as time root (lowest IP: %s)", s_my_ip);
+            vTaskDelay(pdMS_TO_TICKS(TIME_SYNC_INTERVAL_MS));
+            continue;
+        }
+
+        // Try to sync to the elected master
+        if (!try_sync(sock, best_ip)) {
+            ESP_LOGW(TAG, "Sync to elected master %s failed", best_ip);
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(TIME_SYNC_INTERVAL_MS));
+    }
+}
+
+void time_sync_start_elected(const char *my_ip) {
+    strncpy(s_my_ip, my_ip, sizeof(s_my_ip) - 1);
+    // Run master server so peers can elect us if we win
+    time_sync_start_master();
+    xTaskCreate(elected_slave_task, "time_elected", 6144, NULL, 3, NULL);
 }

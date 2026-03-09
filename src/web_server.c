@@ -124,6 +124,7 @@ static esp_err_t handle_ota_post(httpd_req_t *req) {
         int data_len = received;
 
         if (!header_skipped) {
+            int old_pos = header_pos;
             int copy = received < (int)(sizeof(header_buf) - header_pos - 1)
                        ? received : (int)(sizeof(header_buf) - header_pos - 1);
             memcpy(header_buf + header_pos, buf, copy);
@@ -133,8 +134,11 @@ static esp_err_t handle_ota_post(httpd_req_t *req) {
             char *sep = strstr(header_buf, "\r\n\r\n");
             if (sep) {
                 header_skipped = true;
+                // skip = total bytes to consume from start of multipart body
+                // old_pos = bytes already consumed in previous chunks
+                // so buf_skip = bytes to skip in the current buf
                 int skip = (sep + 4) - header_buf;
-                int buf_skip = skip - (header_pos - received);
+                int buf_skip = skip - old_pos;
                 if (buf_skip < 0) buf_skip = 0;
                 data = buf + buf_skip;
                 data_len = received - buf_skip;
