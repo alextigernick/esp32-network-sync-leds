@@ -19,7 +19,20 @@
 // Offset applied to esp_timer_get_time() so all nodes share a common epoch.
 // On master: offset = 0 (master IS the reference).
 // On slaves: offset = master_time - local_time_at_sync.
-static int64_t s_offset_us = 0;
+static int64_t  s_offset_us   = 0;
+static int64_t  s_last_rtt_us = -1;
+static uint32_t s_sync_count  = 0;
+static uint32_t s_fail_count  = 0;
+static char     s_role[20]    = "master";
+
+void time_sync_get_debug(time_sync_debug_t *out) {
+    out->offset_us   = s_offset_us;
+    out->last_rtt_us = s_last_rtt_us;
+    out->sync_count  = s_sync_count;
+    out->fail_count  = s_fail_count;
+    strncpy(out->role, s_role, sizeof(out->role) - 1);
+    out->role[sizeof(out->role) - 1] = '\0';
+}
 
 uint64_t time_sync_get_ms(void) {
     int64_t local_us = (int64_t)esp_timer_get_time();
@@ -75,8 +88,13 @@ static void master_task(void *arg) {
     }
 }
 
-void time_sync_start_master(void) {
+static void start_master_task(void) {
     xTaskCreate(master_task, "time_master", 6144, NULL, 3, NULL);
+}
+
+void time_sync_start_master(void) {
+    strncpy(s_role, "master", sizeof(s_role) - 1);
+    start_master_task();
 }
 
 // ---- slave -------------------------------------------------------------
@@ -119,9 +137,12 @@ static void slave_task(void *arg) {
             int64_t master_us = (int64_t)(master_ms * 1000) + rtt_us / 2;
             int64_t local_us  = (t0 + t1) / 2;
             s_offset_us = master_us - local_us;
+            s_last_rtt_us = rtt_us;
+            s_sync_count++;
 
             ESP_LOGI(TAG, "Time synced. offset=%lld us, rtt=%lld us", (long long)s_offset_us, (long long)rtt_us);
         } else {
+            s_fail_count++;
             ESP_LOGW(TAG, "Time sync request timed out");
         }
 
@@ -131,6 +152,7 @@ static void slave_task(void *arg) {
 
 void time_sync_start_slave(const char *master_ip) {
     strncpy(s_master_ip, master_ip, 15);
+    strncpy(s_role, "slave", sizeof(s_role) - 1);
     xTaskCreate(slave_task, "time_slave", 6144, NULL, 3, NULL);
 }
 
@@ -171,6 +193,8 @@ static bool try_sync(int sock, const char *master_ip) {
     int64_t master_us = (int64_t)(master_ms * 1000) + rtt_us / 2;
     int64_t local_us  = (t0 + t1) / 2;
     s_offset_us = master_us - local_us;
+    s_last_rtt_us = rtt_us;
+    s_sync_count++;
 
     ESP_LOGI(TAG, "Synced to %s. offset=%lld us, rtt=%lld us",
              master_ip, (long long)s_offset_us, (long long)rtt_us);
@@ -187,13 +211,14 @@ static void elected_slave_task(void *arg) {
     uint32_t my_u32 = ip_to_u32(s_my_ip);
 
     while (1) {
-        // Elect: lowest IP among {AP_IP} ∪ {discovered peers} ∪ {self}
+        // Elect: lowest IP among {discovered peers} ∪ {self}
+        // (AP_IP is excluded — in elected mode the AP is not one of our nodes)
         peer_t peers[MAX_PEERS];
         int count = discovery_get_peers(peers, MAX_PEERS);
 
-        uint32_t best_u32 = ip_to_u32(AP_IP);
+        uint32_t best_u32 = my_u32;
         char best_ip[16];
-        strncpy(best_ip, AP_IP, sizeof(best_ip));
+        strncpy(best_ip, s_my_ip, sizeof(best_ip));
 
         for (int i = 0; i < count; i++) {
             uint32_t p = ip_to_u32(peers[i].ip);
@@ -205,13 +230,16 @@ static void elected_slave_task(void *arg) {
 
         if (my_u32 <= best_u32) {
             // Self is elected root — serve time, don't apply an offset
+            strncpy(s_role, "root", sizeof(s_role) - 1);
             ESP_LOGI(TAG, "Elected as time root (lowest IP: %s)", s_my_ip);
             vTaskDelay(pdMS_TO_TICKS(TIME_SYNC_INTERVAL_MS));
             continue;
         }
 
+        snprintf(s_role, sizeof(s_role), "->%s", best_ip);
         // Try to sync to the elected master
         if (!try_sync(sock, best_ip)) {
+            s_fail_count++;
             ESP_LOGW(TAG, "Sync to elected master %s failed", best_ip);
         }
 
@@ -221,7 +249,8 @@ static void elected_slave_task(void *arg) {
 
 void time_sync_start_elected(const char *my_ip) {
     strncpy(s_my_ip, my_ip, sizeof(s_my_ip) - 1);
+    strncpy(s_role, "elected", sizeof(s_role) - 1);
     // Run master server so peers can elect us if we win
-    time_sync_start_master();
+    start_master_task();
     xTaskCreate(elected_slave_task, "time_elected", 6144, NULL, 3, NULL);
 }

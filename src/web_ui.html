@@ -67,6 +67,10 @@
     }
     .badge-pending { background: #530; color: #fa0; }
     .badge-valid   { background: #030; color: #0f9; }
+    .kv { display: flex; justify-content: space-between; font-size: .85rem; margin: .25rem 0; }
+    .kv span:first-child { color: #888; }
+    .kv span:last-child  { color: #cfc; font-variant-numeric: tabular-nums; }
+    .kv span.stale { color: #fa0; }
   </style>
 </head>
 <body>
@@ -96,7 +100,15 @@
     <button class="btn-verify" onclick="verify()">Verify &amp; Cancel Rollback</button>
   </div>
 
-  <p class="time" id="sync-time">sync time: —</p>
+  <!-- Time sync debug -->
+  <div class="card">
+    <h2>Time Sync</h2>
+    <div class="kv"><span>role</span><span id="ts-role">—</span></div>
+    <div class="kv"><span>synced time</span><span id="ts-ms">—</span></div>
+    <div class="kv"><span>offset</span><span id="ts-offset">—</span></div>
+    <div class="kv"><span>last RTT</span><span id="ts-rtt">—</span></div>
+    <div class="kv"><span>syncs ok / fail</span><span id="ts-counts">—</span></div>
+  </div>
 
   <script>
     async function fetchState() {
@@ -126,8 +138,21 @@
           sel.appendChild(o);
         });
 
-        // Sync time
-        document.getElementById('sync-time').textContent = 'sync time: ' + s.sync_ms + ' ms';
+        // Time sync debug
+        document.getElementById('ts-role').textContent = s.ts_role;
+        document.getElementById('ts-ms').textContent = s.sync_ms + ' ms';
+        document.getElementById('ts-offset').textContent =
+          s.ts_offset_us === undefined ? '—' : (s.ts_offset_us / 1000).toFixed(2) + ' ms';
+        const rttEl = document.getElementById('ts-rtt');
+        if (s.ts_rtt_us < 0) {
+          rttEl.textContent = 'never';
+          rttEl.className = 'stale';
+        } else {
+          rttEl.textContent = (s.ts_rtt_us / 1000).toFixed(2) + ' ms';
+          rttEl.className = '';
+        }
+        document.getElementById('ts-counts').textContent =
+          s.ts_sync_count + ' / ' + s.ts_fail_count;
 
         // OTA pending badge
         const badge = document.getElementById('ota-badge');

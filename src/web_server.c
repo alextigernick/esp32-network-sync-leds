@@ -16,7 +16,8 @@
 
 #define TAG "web_server"
 
-#include "web_ui_html.h"
+extern const uint8_t web_ui_html_start[] asm("_binary_web_ui_html_start");
+extern const uint8_t web_ui_html_end[]   asm("_binary_web_ui_html_end");
 
 static bool s_led_on = false;
 
@@ -38,15 +39,26 @@ static esp_err_t handle_state(httpd_req_t *req) {
     esp_ota_get_state_partition(running, &ota_state);
     bool ota_pending = (ota_state == ESP_OTA_IMG_PENDING_VERIFY);
 
+    time_sync_debug_t dbg;
+    time_sync_get_debug(&dbg);
+
     static char buf[1024];
     int pos = 0;
 
 #define A(...) pos += snprintf(buf + pos, sizeof(buf) - pos, __VA_ARGS__)
 
-    A("{\"led\":%s,\"sync_ms\":%llu,\"ota_pending\":%s,\"peers\":[",
+    A("{\"led\":%s,\"sync_ms\":%llu,\"ota_pending\":%s"
+      ",\"ts_role\":\"%s\",\"ts_offset_us\":%lld,\"ts_rtt_us\":%lld"
+      ",\"ts_sync_count\":%lu,\"ts_fail_count\":%lu"
+      ",\"peers\":[",
       s_led_on ? "true" : "false",
       (unsigned long long)sync_ms,
-      ota_pending ? "true" : "false");
+      ota_pending ? "true" : "false",
+      dbg.role,
+      (long long)dbg.offset_us,
+      (long long)dbg.last_rtt_us,
+      (unsigned long)dbg.sync_count,
+      (unsigned long)dbg.fail_count);
 
     for (int i = 0; i < peer_count; i++) {
         A("%s{\"name\":\"%s\",\"ip\":\"%s\"}",
@@ -65,7 +77,8 @@ static esp_err_t handle_state(httpd_req_t *req) {
 
 static esp_err_t handle_get(httpd_req_t *req) {
     httpd_resp_set_type(req, "text/html");
-    httpd_resp_send(req, web_ui_html, web_ui_html_len);
+    httpd_resp_send(req, (const char *)web_ui_html_start,
+                    web_ui_html_end - web_ui_html_start);
     return ESP_OK;
 }
 

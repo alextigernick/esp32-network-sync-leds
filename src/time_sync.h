@@ -15,3 +15,14 @@ void time_sync_start_elected(const char *my_ip);
 
 // Return current synced time in milliseconds (monotonic, shared across nodes)
 uint64_t time_sync_get_ms(void);
+
+typedef struct {
+    int64_t  offset_us;   // current clock offset applied to local timer
+    int64_t  last_rtt_us; // RTT of last successful sync round-trip (-1 if never synced)
+    uint32_t sync_count;  // total successful syncs
+    uint32_t fail_count;  // total failed sync attempts
+    char     role[20];    // "master", "slave", "root", or "->x.x.x.x"
+} time_sync_debug_t;
+
+// Fill *out with current debug state
+void time_sync_get_debug(time_sync_debug_t *out);
