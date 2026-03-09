@@ -12,8 +12,10 @@
       display: flex;
       flex-direction: column;
       align-items: center;
-      padding: 2rem;
-      gap: 1.5rem;
+      padding: 1.5rem 1rem 2rem;
+      gap: 1.2rem;
+      min-height: 100vh;
+      box-sizing: border-box;
     }
     h1 { margin: 0; font-size: 1.4rem; letter-spacing: .1em; color: #0f9; }
     .card {
@@ -56,7 +58,6 @@
       cursor: pointer;
     }
     input[type=file] { width: 100%; color: #eee; margin-bottom: .8rem; }
-    .time { font-size: .8rem; color: #555; text-align: center; }
     .badge {
       display: inline-block;
       font-size: .7rem;
@@ -96,155 +97,227 @@
     #layout-plot { display: block; margin-top: .8rem; background: #1a1a1a; border-radius: 6px; }
     .upload-row { display: flex; gap: .5rem; align-items: center; margin-top: .6rem; flex-wrap: wrap; }
     .upload-row input[type=file] { flex: 1; font-size: .8rem; color: #aaa; min-width: 0; }
+    #layout-card:fullscreen {
+      background: #111; padding: 1rem; display: flex; flex-direction: column;
+      width: 100vw; height: 100vh; box-sizing: border-box; max-width: none;
+    }
+    #layout-card:fullscreen #layout-plot { flex: 1; width: 100%; height: 100%; }
+
+    /* ---- tabs ---- */
+    .tabs {
+      display: flex;
+      border-bottom: 1px solid #333;
+      width: 100%;
+      max-width: 620px;
+    }
+    .tab-btn {
+      flex: 1;
+      background: none;
+      border: none;
+      border-bottom: 2px solid transparent;
+      color: #888;
+      font-family: monospace;
+      font-size: .8rem;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+      padding: .5rem .4rem .45rem;
+      cursor: pointer;
+      margin: 0;
+      border-radius: 0;
+      transition: color .15s, border-color .15s;
+    }
+    .tab-btn:hover { color: #ccc; }
+    .tab-btn.active { color: #0f9; border-bottom-color: #0f9; }
+    .tab-panel { display: none; flex-direction: column; align-items: center; gap: 1.2rem; width: 100%; }
+    .tab-panel.active { display: flex; }
   </style>
 </head>
 <body>
   <h1>ESP32 NODE <span id="ota-badge"></span></h1>
 
-  <!-- LED control -->
-  <div class="card">
-    <h2>LED Control</h2>
-    <button id="led-btn" onclick="toggleLed()">...</button>
-  </div>
+  <nav class="tabs">
+    <button class="tab-btn active" onclick="switchTab('mesh')">Mesh Control</button>
+    <button class="tab-btn"        onclick="switchTab('device')">Device Config</button>
+    <button class="tab-btn"        onclick="switchTab('debug')">Debug</button>
+  </nav>
 
-  <!-- Synchronized flash -->
-  <div class="card">
-    <h2>Synchronized Flash</h2>
-    <button id="flash-btn" onclick="toggleFlash()">...</button>
-    <div class="row" style="margin-top:.8rem">
-      <label>Period</label>
-      <input type="range" id="period-sl" min="100" max="10000" step="100" value="1000"
-             oninput="updateSliderLabel('period-sl','period-val',v=>v/1000+'s'); scheduleSettingsPush()">
-      <span class="val" id="period-val">1.0s</span>
-    </div>
-    <div class="row">
-      <label>Duty</label>
-      <input type="range" id="duty-sl" min="1" max="100" step="1" value="50"
-             oninput="updateSliderLabel('duty-sl','duty-val',v=>v+'%'); scheduleSettingsPush()">
-      <span class="val" id="duty-val">50%</span>
-    </div>
-    <div style="border-top:1px solid #2a2a2a;margin:.8rem 0 .4rem"></div>
-    <div class="row">
-      <label>R</label>
-      <input type="range" class="r-track" id="r-sl" min="0" max="255" step="1" value="255"
-             oninput="updateColor(); scheduleSettingsPush()">
-      <span class="val" id="r-val">255</span>
-    </div>
-    <div class="row">
-      <label>G</label>
-      <input type="range" class="g-track" id="g-sl" min="0" max="255" step="1" value="255"
-             oninput="updateColor(); scheduleSettingsPush()">
-      <span class="val" id="g-val">255</span>
-    </div>
-    <div class="row">
-      <label>B</label>
-      <input type="range" class="b-track" id="b-sl" min="0" max="255" step="1" value="255"
-             oninput="updateColor(); scheduleSettingsPush()">
-      <span class="val" id="b-val">255</span>
-    </div>
-    <div class="color-preview" id="color-preview"></div>
-  </div>
+  <!-- ===== TAB: Mesh Control ===== -->
+  <div class="tab-panel active" id="tab-mesh">
 
-  <!-- Node config -->
-  <div class="card">
-    <h2>Node Config</h2>
-    <div class="row">
-      <label>Strip len</label>
-      <input type="number" id="num-leds-inp" min="1" max="500" value="8"
-             style="flex:1;padding:.4rem;background:#282828;color:#eee;border:1px solid #444;border-radius:6px;font-family:monospace;font-size:.9rem">
-      <span class="val" style="min-width:2rem">LEDs</span>
+    <!-- LED control -->
+    <div class="card">
+      <h2>LED Control</h2>
+      <button id="led-btn" onclick="toggleLed()">...</button>
     </div>
-    <button class="btn-off" style="margin-top:.6rem" onclick="saveNodeConfig()">Save</button>
-  </div>
 
-  <!-- Grid config -->
-  <div class="card grid-card">
-    <h2>Grid Layout</h2>
-    <div class="row">
-      <label>Rows</label>
-      <input type="number" class="grid-inp" id="grid-rows" min="1" max="32" value="4">
-      <label style="margin-left:.6rem">Cols</label>
-      <input type="number" class="grid-inp" id="grid-cols" min="1" max="32" value="8">
-    </div>
-    <div class="row" style="margin-top:.4rem">
-      <label>X spacing</label>
-      <input type="number" class="grid-inp" id="grid-x-spacing" min="0.01" step="any" value="50">
-      <span style="color:#888;font-size:.8rem;margin-left:.3rem">mm</span>
-      <label style="margin-left:.6rem">Y spacing</label>
-      <input type="number" class="grid-inp" id="grid-y-spacing" min="0.01" step="any" value="50">
-      <span style="color:#888;font-size:.8rem;margin-left:.3rem">mm</span>
-    </div>
-    <div class="row" style="margin-top:.4rem">
-      <label>Origin</label>
-      <select id="grid-origin" style="flex:1;padding:.3rem .4rem;background:#282828;color:#eee;border:1px solid #444;border-radius:6px;font-family:monospace;font-size:.85rem">
-        <option value="0">Top-left</option>
-        <option value="1">Top-right</option>
-        <option value="2">Bottom-left</option>
-        <option value="3">Bottom-right</option>
-      </select>
-    </div>
-    <div class="row" style="margin-top:.4rem">
-      <label>Direction</label>
-      <select id="grid-dir" style="flex:1;padding:.3rem .4rem;background:#282828;color:#eee;border:1px solid #444;border-radius:6px;font-family:monospace;font-size:.85rem">
-        <option value="1">Row-first (L↔R)</option>
-        <option value="0">Col-first (T↕B)</option>
-      </select>
-    </div>
-    <div style="display:flex;gap:.5rem;margin-top:.8rem;flex-wrap:wrap">
-      <button class="btn-off" onclick="generateAndUploadCsv()">Generate &amp; Upload CSV</button>
-    </div>
-  </div>
-
-  <!-- Pixel layout -->
-  <div class="card grid-card">
-    <h2>Pixel Layout</h2>
-    <div id="layout-info" style="font-size:.8rem;color:#888">No layout loaded.</div>
-    <svg id="layout-plot" width="300" height="200"></svg>
-    <div class="upload-row">
-      <input type="file" id="csv-file" accept=".csv,text/plain">
-      <button class="btn-off" onclick="uploadCsv()">Upload CSV</button>
-      <button class="btn-off" onclick="downloadCsv()">Download</button>
-    </div>
-  </div>
-
-  <!-- Peer navigator -->
-  <div class="card">
-    <h2>Other Nodes (<span id="peer-count">0</span> found)</h2>
-    <select id="peer-select" onchange="if(this.value) window.location='http://'+this.value">
-      <option value="">-- navigate to node --</option>
-    </select>
-  </div>
-
-  <!-- OTA update -->
-  <div class="card">
-    <h2>OTA Update</h2>
-    <form method="POST" action="/ota" enctype="multipart/form-data">
-      <input type="file" name="firmware" accept=".bin">
-      <button class="btn-off" type="submit">Flash Firmware</button>
-    </form>
-    <button class="btn-verify" onclick="verify()">Verify &amp; Cancel Rollback</button>
-  </div>
-
-  <!-- Time sync debug -->
-  <div class="card">
-    <h2>Time Sync</h2>
-    <div class="kv"><span>role</span><span id="ts-role">—</span></div>
-    <div class="kv"><span>synced time</span><span id="ts-ms">—</span></div>
-    <div class="kv"><span>offset</span><span id="ts-offset">—</span></div>
-    <div class="kv"><span>last RTT</span><span id="ts-rtt">—</span></div>
-    <div class="kv"><span>syncs ok / fail</span><span id="ts-counts">—</span></div>
-    <div style="display:flex;gap:.3rem;margin-top:.8rem;align-items:stretch">
-      <div style="display:flex;flex-direction:column;justify-content:space-between;font-size:.7rem;color:#555;text-align:right;min-width:2.5rem">
-        <span id="plot-max">—</span>
-        <span id="plot-min">—</span>
+    <!-- Synchronized flash -->
+    <div class="card">
+      <h2>Synchronized Flash</h2>
+      <button id="flash-btn" onclick="toggleFlash()">...</button>
+      <div class="row" style="margin-top:.8rem">
+        <label>Period</label>
+        <input type="range" id="period-sl" min="100" max="10000" step="100" value="1000"
+               oninput="updateSliderLabel('period-sl','period-val',v=>v/1000+'s'); scheduleSettingsPush()">
+        <span class="val" id="period-val">1.0s</span>
       </div>
-      <canvas id="offset-plot" width="220" height="80"
-              style="border:1px solid #333;border-radius:4px;display:block"></canvas>
+      <div class="row">
+        <label>Duty</label>
+        <input type="range" id="duty-sl" min="1" max="100" step="1" value="50"
+               oninput="updateSliderLabel('duty-sl','duty-val',v=>v+'%'); scheduleSettingsPush()">
+        <span class="val" id="duty-val">50%</span>
+      </div>
+      <div style="border-top:1px solid #2a2a2a;margin:.8rem 0 .4rem"></div>
+      <div class="row">
+        <label>R</label>
+        <input type="range" class="r-track" id="r-sl" min="0" max="255" step="1" value="255"
+               oninput="updateColor(); scheduleSettingsPush()">
+        <span class="val" id="r-val">255</span>
+      </div>
+      <div class="row">
+        <label>G</label>
+        <input type="range" class="g-track" id="g-sl" min="0" max="255" step="1" value="255"
+               oninput="updateColor(); scheduleSettingsPush()">
+        <span class="val" id="g-val">255</span>
+      </div>
+      <div class="row">
+        <label>B</label>
+        <input type="range" class="b-track" id="b-sl" min="0" max="255" step="1" value="255"
+               oninput="updateColor(); scheduleSettingsPush()">
+        <span class="val" id="b-val">255</span>
+      </div>
+      <div class="color-preview" id="color-preview"></div>
     </div>
-    <div style="font-size:.7rem;color:#555;text-align:center;margin-top:.2rem">offset jitter</div>
-  </div>
+
+    <!-- Peer navigator -->
+    <div class="card">
+      <h2>Other Nodes (<span id="peer-count">0</span> found)</h2>
+      <select id="peer-select" onchange="if(this.value) window.location='http://'+this.value">
+        <option value="">-- navigate to node --</option>
+      </select>
+    </div>
+
+  </div><!-- /tab-mesh -->
+
+  <!-- ===== TAB: Device Config ===== -->
+  <div class="tab-panel" id="tab-device">
+
+    <!-- Node config -->
+    <div class="card">
+      <h2>Node Config</h2>
+      <div class="row">
+        <label>Strip len</label>
+        <input type="number" id="num-leds-inp" min="1" max="500" value="8"
+               style="flex:1;padding:.4rem;background:#282828;color:#eee;border:1px solid #444;border-radius:6px;font-family:monospace;font-size:.9rem">
+        <span class="val" style="min-width:2rem">LEDs</span>
+      </div>
+      <button class="btn-off" style="margin-top:.6rem" onclick="saveNodeConfig()">Save</button>
+    </div>
+
+    <!-- Grid config -->
+    <div class="card grid-card">
+      <h2>Grid Layout</h2>
+      <div class="row">
+        <label>Rows</label>
+        <input type="number" class="grid-inp" id="grid-rows" min="1" max="32" value="4">
+        <label style="margin-left:.6rem">Cols</label>
+        <input type="number" class="grid-inp" id="grid-cols" min="1" max="32" value="8">
+      </div>
+      <div class="row" style="margin-top:.4rem">
+        <label>X spacing</label>
+        <input type="number" class="grid-inp" id="grid-x-spacing" min="0.01" step="any" value="50">
+        <span style="color:#888;font-size:.8rem;margin-left:.3rem">mm</span>
+        <label style="margin-left:.6rem">Y spacing</label>
+        <input type="number" class="grid-inp" id="grid-y-spacing" min="0.01" step="any" value="50">
+        <span style="color:#888;font-size:.8rem;margin-left:.3rem">mm</span>
+      </div>
+      <div class="row" style="margin-top:.4rem">
+        <label>Origin</label>
+        <select id="grid-origin" style="flex:1;padding:.3rem .4rem;background:#282828;color:#eee;border:1px solid #444;border-radius:6px;font-family:monospace;font-size:.85rem">
+          <option value="0">Top-left</option>
+          <option value="1">Top-right</option>
+          <option value="2">Bottom-left</option>
+          <option value="3">Bottom-right</option>
+        </select>
+      </div>
+      <div class="row" style="margin-top:.4rem">
+        <label>Direction</label>
+        <select id="grid-dir" style="flex:1;padding:.3rem .4rem;background:#282828;color:#eee;border:1px solid #444;border-radius:6px;font-family:monospace;font-size:.85rem">
+          <option value="1">Row-first (L↔R)</option>
+          <option value="0">Col-first (T↕B)</option>
+        </select>
+      </div>
+      <div style="display:flex;gap:.5rem;margin-top:.8rem;flex-wrap:wrap">
+        <button class="btn-off" onclick="generateAndUploadCsv()">Generate &amp; Upload CSV</button>
+      </div>
+    </div>
+
+    <!-- Pixel layout -->
+    <div class="card grid-card" id="layout-card">
+      <h2 style="display:flex;justify-content:space-between;align-items:center">
+        Pixel Layout
+        <button class="btn-off" id="fs-btn" onclick="toggleFullscreen()"
+                style="width:auto;padding:.2rem .6rem;font-size:.75rem;margin:0">⛶ Fullscreen</button>
+      </h2>
+      <div id="layout-info" style="font-size:.8rem;color:#888">No layout loaded.</div>
+      <svg id="layout-plot" width="300" height="200"></svg>
+      <div class="upload-row">
+        <input type="file" id="csv-file" accept=".csv,text/plain">
+        <button class="btn-off" onclick="uploadCsv()">Upload CSV</button>
+        <button class="btn-off" onclick="downloadCsv()">Download</button>
+      </div>
+    </div>
+
+  </div><!-- /tab-device -->
+
+  <!-- ===== TAB: Debug ===== -->
+  <div class="tab-panel" id="tab-debug">
+
+    <!-- Time sync debug -->
+    <div class="card">
+      <h2>Time Sync</h2>
+      <div class="kv"><span>role</span><span id="ts-role">—</span></div>
+      <div class="kv"><span>synced time</span><span id="ts-ms">—</span></div>
+      <div class="kv"><span>offset</span><span id="ts-offset">—</span></div>
+      <div class="kv"><span>last RTT</span><span id="ts-rtt">—</span></div>
+      <div class="kv"><span>syncs ok / fail</span><span id="ts-counts">—</span></div>
+      <div style="display:flex;gap:.3rem;margin-top:.8rem;align-items:stretch">
+        <div style="display:flex;flex-direction:column;justify-content:space-between;font-size:.7rem;color:#555;text-align:right;min-width:2.5rem">
+          <span id="plot-max">—</span>
+          <span id="plot-min">—</span>
+        </div>
+        <canvas id="offset-plot" width="220" height="80"
+                style="border:1px solid #333;border-radius:4px;display:block"></canvas>
+      </div>
+      <div style="font-size:.7rem;color:#555;text-align:center;margin-top:.2rem">offset jitter</div>
+    </div>
+
+    <!-- OTA update -->
+    <div class="card">
+      <h2>OTA Update</h2>
+      <form method="POST" action="/ota" enctype="multipart/form-data">
+        <input type="file" name="firmware" accept=".bin">
+        <button class="btn-off" type="submit">Flash Firmware</button>
+      </form>
+      <button class="btn-verify" onclick="verify()">Verify &amp; Cancel Rollback</button>
+    </div>
+
+  </div><!-- /tab-debug -->
 
   <script>
+    // ---- tabs --------------------------------------------------------------
+
+    function switchTab(name) {
+      document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      document.getElementById('tab-' + name).classList.add('active');
+      document.querySelectorAll('.tab-btn').forEach(b => {
+        if (b.textContent.toLowerCase().includes(name === 'mesh' ? 'mesh'
+            : name === 'device' ? 'device' : 'debug')) b.classList.add('active');
+      });
+    }
+
+    // ---- settings ----------------------------------------------------------
+
     let _pushTimer = null;
     function scheduleSettingsPush() {
       clearTimeout(_pushTimer);
@@ -263,8 +336,7 @@
       document.getElementById('r-val').textContent = r;
       document.getElementById('g-val').textContent = g;
       document.getElementById('b-val').textContent = b;
-      document.getElementById('color-preview').style.background =
-        `rgb(${r},${g},${b})`;
+      document.getElementById('color-preview').style.background = `rgb(${r},${g},${b})`;
     }
 
     async function pushSettings(forward = true) {
@@ -297,7 +369,8 @@
     }
 
     // ---- offset plot -------------------------------------------------------
-    const PLOT_MAX = 120; // samples kept (~6 min at 3s poll)
+
+    const PLOT_MAX = 120;
     const offsetHistory = [];
 
     function drawOffsetPlot() {
@@ -305,26 +378,15 @@
       const ctx = canvas.getContext('2d');
       const W = canvas.width, H = canvas.height;
       ctx.clearRect(0, 0, W, H);
-
       if (offsetHistory.length < 2) return;
-
       const min = Math.min(...offsetHistory);
       const max = Math.max(...offsetHistory);
       const span = max - min || 1;
       const pad = 6;
-
-      // Axis zero line
       const zeroY = H - pad - ((0 - min) / span) * (H - 2 * pad);
-      ctx.strokeStyle = '#333';
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(0, zeroY);
-      ctx.lineTo(W, zeroY);
-      ctx.stroke();
-
-      // Data line
-      ctx.strokeStyle = '#0f9';
-      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = '#333'; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(0, zeroY); ctx.lineTo(W, zeroY); ctx.stroke();
+      ctx.strokeStyle = '#0f9'; ctx.lineWidth = 1.5;
       ctx.beginPath();
       offsetHistory.forEach((v, i) => {
         const x = (i / (PLOT_MAX - 1)) * W;
@@ -332,14 +394,12 @@
         i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
       });
       ctx.stroke();
-
-      // Labels
-      const fmt = us => Math.abs(us) >= 1000
-        ? (us / 1000).toFixed(2) + 'ms'
-        : us.toFixed(0) + 'µs';
+      const fmt = us => Math.abs(us) >= 1000 ? (us/1000).toFixed(2)+'ms' : us.toFixed(0)+'µs';
       document.getElementById('plot-min').textContent = fmt(min);
       document.getElementById('plot-max').textContent = fmt(max);
     }
+
+    // ---- state poll --------------------------------------------------------
 
     async function fetchState() {
       try {
@@ -349,18 +409,12 @@
 
         // LED button
         const btn = document.getElementById('led-btn');
-        if (s.led) {
-          btn.textContent = 'LED is ON — tap to turn OFF';
-          btn.className = 'btn-on';
-        } else {
-          btn.textContent = 'LED is OFF — tap to turn ON';
-          btn.className = 'btn-off';
-        }
+        btn.textContent = s.led ? 'LED is ON — tap to turn OFF' : 'LED is OFF — tap to turn ON';
+        btn.className = s.led ? 'btn-on' : 'btn-off';
 
-        // Flash settings (only update sliders if user is not dragging)
+        // Flash settings
         if (s.flash_enabled !== undefined) {
           updateFlashBtn(s.flash_enabled);
-          // Only sync slider if not being interacted with
           if (document.activeElement !== document.getElementById('period-sl')) {
             document.getElementById('period-sl').value = s.period_ms;
             document.getElementById('period-val').textContent = (s.period_ms / 1000).toFixed(1) + 's';
@@ -389,7 +443,7 @@
           sel.appendChild(o);
         });
 
-        // Time sync debug
+        // Time sync
         document.getElementById('ts-role').textContent = s.ts_role;
         document.getElementById('ts-ms').textContent = s.sync_ms + ' ms';
         const offsetUs = s.ts_offset_us;
@@ -401,28 +455,15 @@
           drawOffsetPlot();
         }
         const rttEl = document.getElementById('ts-rtt');
-        if (s.ts_rtt_us < 0) {
-          rttEl.textContent = 'never';
-          rttEl.className = 'stale';
-        } else {
-          rttEl.textContent = (s.ts_rtt_us / 1000).toFixed(2) + ' ms';
-          rttEl.className = '';
-        }
-        document.getElementById('ts-counts').textContent =
-          s.ts_sync_count + ' / ' + s.ts_fail_count;
+        if (s.ts_rtt_us < 0) { rttEl.textContent = 'never'; rttEl.className = 'stale'; }
+        else { rttEl.textContent = (s.ts_rtt_us / 1000).toFixed(2) + ' ms'; rttEl.className = ''; }
+        document.getElementById('ts-counts').textContent = s.ts_sync_count + ' / ' + s.ts_fail_count;
 
-        // OTA pending badge
+        // OTA badge
         const badge = document.getElementById('ota-badge');
-        if (s.ota_pending) {
-          badge.textContent = 'PENDING VERIFY';
-          badge.className = 'badge badge-pending';
-        } else {
-          badge.textContent = 'verified';
-          badge.className = 'badge badge-valid';
-        }
-      } catch (e) {
-        console.warn('state fetch failed', e);
-      }
+        if (s.ota_pending) { badge.textContent = 'PENDING VERIFY'; badge.className = 'badge badge-pending'; }
+        else               { badge.textContent = 'verified';        badge.className = 'badge badge-valid';   }
+      } catch (e) { console.warn('state fetch failed', e); }
     }
 
     async function toggleLed() {
@@ -438,10 +479,11 @@
 
     async function verify() {
       const r = await fetch('/ota/verify', {method: 'POST'});
-      const msg = await r.text();
-      alert(msg);
+      alert(await r.text());
       await fetchState();
     }
+
+    // ---- node config -------------------------------------------------------
 
     async function fetchNodeConfig() {
       try {
@@ -484,7 +526,6 @@
       const rowFirst = +document.getElementById('grid-dir').value;
       const flipRows = (origin === 2 || origin === 3);
       const flipCols = (origin === 1 || origin === 3);
-
       const lines = ['# index,x_mm,y_mm — generated from grid config'];
       for (let r = 0; r < rows; r++) {
         for (let c = 0; c < cols; c++) {
@@ -527,7 +568,6 @@
     let _activePixelIdx = -1;
 
     async function setPixel(idx) {
-      // Toggle off if clicking the already-active pixel
       const next = (idx === _activePixelIdx) ? -1 : idx;
       _activePixelIdx = next;
       await fetch('/led_pixel', {
@@ -535,7 +575,6 @@
         headers: {'Content-Type': 'application/x-www-form-urlencoded'},
         body: 'idx=' + next,
       });
-      // Update circle colours without a full re-render
       document.querySelectorAll('#layout-plot circle').forEach(c => {
         const active = +c.dataset.idx === _activePixelIdx;
         c.setAttribute('fill', active ? '#ff0' : '#0f9');
@@ -555,7 +594,6 @@
       const scale  = Math.min((W - 2*PAD) / rangeX, (H - 2*PAD) / rangeY);
       const sx = x => PAD + (x - minX) * scale;
       const sy = y => PAD + (y - minY) * scale;
-      // Draw wiring order lines (sorted by LED index)
       const sorted = [...points].sort((a, b) => a.idx - b.idx);
       let html = '';
       for (let i = 1; i < sorted.length; i++) {
@@ -607,6 +645,22 @@
       a.download = 'pixel_layout.csv';
       a.click();
     }
+
+    function toggleFullscreen() {
+      const card = document.getElementById('layout-card');
+      if (!document.fullscreenElement) card.requestFullscreen();
+      else document.exitFullscreen();
+    }
+
+    document.addEventListener('fullscreenchange', () => {
+      const btn = document.getElementById('fs-btn');
+      const inFs = !!document.fullscreenElement;
+      btn.textContent = inFs ? '✕ Exit fullscreen' : '⛶ Fullscreen';
+      const pts = parseCsv(_layoutCsv);
+      if (pts.length) renderLayoutPlot(pts);
+    });
+
+    // ---- init --------------------------------------------------------------
 
     updateColor();
     fetchState();
