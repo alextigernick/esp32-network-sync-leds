@@ -127,7 +127,7 @@ static esp_err_t handle_state(httpd_req_t *req) {
     time_sync_debug_t dbg;
     time_sync_get_debug(&dbg);
 
-    static char buf[1024];
+    static char buf[1280];
     int pos = 0;
 
 #define A(...) pos += snprintf(buf + pos, sizeof(buf) - pos, __VA_ARGS__)
@@ -140,6 +140,8 @@ static esp_err_t handle_state(httpd_req_t *req) {
       ",\"ts_sync_count\":%lu,\"ts_fail_count\":%lu"
       ",\"flash_enabled\":%s,\"period_ms\":%lu,\"duty_percent\":%u"
       ",\"r\":%u,\"g\":%u,\"b\":%u"
+      ",\"mode\":%u,\"sine_period_mm10\":%lu,\"sine_angle_deg10\":%ld,\"sine_speed_c100\":%ld"
+      ",\"perlin_scale_mm10\":%lu,\"perlin_speed_c100\":%ld"
       ",\"peers\":[",
       s_led_on ? "true" : "false",
       (unsigned long long)sync_ms,
@@ -152,7 +154,13 @@ static esp_err_t handle_state(httpd_req_t *req) {
       cfg.flash_enabled ? "true" : "false",
       (unsigned long)cfg.period_ms,
       (unsigned)cfg.duty_percent,
-      (unsigned)cfg.r, (unsigned)cfg.g, (unsigned)cfg.b);
+      (unsigned)cfg.r, (unsigned)cfg.g, (unsigned)cfg.b,
+      (unsigned)cfg.mode,
+      (unsigned long)cfg.sine_period_mm10,
+      (long)cfg.sine_angle_deg10,
+      (long)cfg.sine_speed_c100,
+      (unsigned long)cfg.perlin_scale_mm10,
+      (long)cfg.perlin_speed_c100);
 
     for (int i = 0; i < peer_count; i++) {
         A("%s{\"name\":\"%s\",\"ip\":\"%s\"}",
@@ -307,7 +315,7 @@ static esp_err_t handle_ota_verify(httpd_req_t *req) {
 static esp_err_t handle_settings_get(httpd_req_t *req) {
     settings_t cfg;
     settings_get(&cfg);
-    static char buf[64];
+    static char buf[192];
     settings_encode(&cfg, buf, sizeof(buf));
     httpd_resp_set_type(req, "application/x-www-form-urlencoded");
     httpd_resp_send(req, buf, strlen(buf));
@@ -317,7 +325,7 @@ static esp_err_t handle_settings_get(httpd_req_t *req) {
 // ---- /settings POST ----------------------------------------------------
 
 static esp_err_t handle_settings_post(httpd_req_t *req) {
-    char body[128] = {0};
+    char body[256] = {0};
     int recv_len = req->content_len < (int)sizeof(body) - 1
                    ? req->content_len : (int)sizeof(body) - 1;
     if (recv_len > 0) httpd_req_recv(req, body, recv_len);

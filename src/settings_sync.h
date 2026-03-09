@@ -9,11 +9,30 @@
 //   2. Update settings_encode() and settings_decode() in settings_sync.c.
 //   3. Add it to the /state JSON and the web UI.
 // ---------------------------------------------------------------------------
+typedef enum {
+    MODE_FLASH   = 0,
+    MODE_SINE    = 1,
+    MODE_PERLIN  = 2,
+} led_mode_t;
+
 typedef struct {
+    // Common
+    uint8_t  mode;         // led_mode_t
+    uint8_t  r, g, b;     // LED on-color
+
+    // MODE_FLASH
     bool     flash_enabled;
     uint32_t period_ms;    // 100 – 10 000
     uint8_t  duty_percent; // 1 – 100
-    uint8_t  r, g, b;     // LED on-color (default white)
+
+    // MODE_SINE
+    uint32_t sine_period_mm10; // period in 0.1 mm units (100 = 10.0 mm)
+    int32_t  sine_angle_deg10; // wave angle, 0.1° units (900 = 90.0°)
+    int32_t  sine_speed_c100;  // animation speed in 0.01 Hz units (100 = 1.00 Hz)
+
+    // MODE_PERLIN
+    uint32_t perlin_scale_mm10; // spatial scale in 0.1 mm units (1000 = 100.0 mm)
+    int32_t  perlin_speed_c100; // temporal drift in 0.01 noise-units/s (100 = 1.00)
 } settings_t;
 
 // Return a snapshot of current settings.

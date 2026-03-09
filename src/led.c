@@ -79,6 +79,22 @@ void led_set_pixel(int idx) {
     rmt_transmit(s_chan, s_encoder, s_pixels, s_num_leds * 3, &tx_cfg);
 }
 
+void led_write_rgb(const uint8_t *rgb, int count) {
+    s_probe_mode = false;
+    if (count > s_num_leds) count = s_num_leds;
+    for (int i = 0; i < count; i++) {
+        s_pixels[i * 3 + 0] = rgb[i * 3 + 1]; // G
+        s_pixels[i * 3 + 1] = rgb[i * 3 + 0]; // R
+        s_pixels[i * 3 + 2] = rgb[i * 3 + 2]; // B
+    }
+    // zero out any remaining pixels beyond count
+    if (count < s_num_leds)
+        memset(s_pixels + count * 3, 0, (s_num_leds - count) * 3);
+    rmt_transmit_config_t tx_cfg = { .loop_count = 0 };
+    rmt_tx_wait_all_done(s_chan, 10);
+    rmt_transmit(s_chan, s_encoder, s_pixels, s_num_leds * 3, &tx_cfg);
+}
+
 void led_set(bool on) {
     if (s_probe_mode) return;
     if (on) {

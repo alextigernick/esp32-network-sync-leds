@@ -17,5 +17,9 @@ void led_set(bool on);
 // Pass idx = -1 to just clear the strip.
 void led_set_pixel(int idx);
 
+// Write arbitrary per-pixel RGB data. rgb must point to count*3 bytes in R,G,B order.
+// Overrides the uniform color; disables probe mode.
+void led_write_rgb(const uint8_t *rgb, int count);
+
 // Update the active LED count at runtime (clamped to [1, NUM_LEDS]).
 void led_set_count(uint16_t n);
