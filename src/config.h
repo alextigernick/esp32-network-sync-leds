@@ -24,7 +24,17 @@
 #define DISCOVERY_INTERVAL_MS  3000
 
 // How often STA nodes request time sync (ms)
-#define TIME_SYNC_INTERVAL_MS  5000
+#define TIME_SYNC_INTERVAL_MS  1000
+
+// Samples taken per sync round; best (min-RTT) is used
+#define TIME_SYNC_SAMPLES      8
+
+// Gap between samples in one sync burst (ms)
+#define TIME_SYNC_SAMPLE_GAP_MS  3
+
+// EWMA weight for new offset sample (0–256, higher = faster tracking)
+// 77 ≈ 0.3 — converges in ~10 syncs, filters single-sample spikes
+#define TIME_SYNC_EWMA_ALPHA   77
 
 // HTTP timeout when forwarding settings to peers (ms)
 #define SETTINGS_HTTP_TIMEOUT_MS  1500

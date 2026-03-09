@@ -153,6 +153,8 @@ static void flash_task(void *arg) {
             uint32_t phase = (uint32_t)(ms % cur.period_ms);
             uint32_t on_time = (uint32_t)((uint64_t)cur.period_ms * cur.duty_percent / 100);
             gpio_set_level(LED_GPIO, phase < on_time ? 1 : 0);
+        } else {
+            gpio_set_level(LED_GPIO, 0);
         }
 
         vTaskDelay(pdMS_TO_TICKS(10)); // 10 ms resolution

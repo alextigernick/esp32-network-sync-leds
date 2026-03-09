@@ -147,6 +147,10 @@ void app_main(void) {
 
     bool is_sta = wifi_connect_or_become_ap();
 
+    // Disable WiFi power save — prevents AP from buffering packets up to ~100ms
+    // before delivering them to sleeping STAs. Critical for low-jitter time sync.
+    esp_wifi_set_ps(WIFI_PS_NONE);
+
     // Build a unique node name from the last 3 bytes of the STA MAC
     {
         uint8_t mac[6];

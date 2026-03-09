@@ -41,7 +41,8 @@ All nodes run identical firmware. On boot, each node attempts to join the WiFi n
 | `src/config.h` | All tunables: SSID, password, GPIO, ports, timeouts |
 | `src/discovery.c/h` | UDP multicast peer discovery (`239.0.0.1:5000`). Two tasks: announce (sends own IP/name every 3s) and listen (receives peers, expires stale ones) |
 | `src/time_sync.c/h` | UDP time sync on port 5001. Master serves current ms timestamp on request; slaves poll every 5s and apply RTT-corrected offset to `esp_timer_get_time()` |
-| `src/web_server.c/h` | ESP-IDF `esp_http_server`. GET `/` serves control page; POST `/led` toggles GPIO 20; POST `/ota` accepts multipart firmware upload and reboots. Page shows LED toggle, peer dropdown, OTA form |
+| `src/web_server.c/h` | ESP-IDF `esp_http_server`. GET `/` serves control page; POST `/led` toggles GPIO 20; POST `/ota` accepts multipart firmware upload and reboots. GET/POST `/settings` for synchronized settings. Page shows LED toggle, flash control, peer dropdown, OTA form |
+| `src/settings_sync.c/h` | Synchronized settings. `settings_t` holds all shared state; `settings_apply_and_forward()` applies locally then pushes to all peers via HTTP POST `/settings?fwd=0`. `flash_task` drives GPIO 20 based on `time_sync_get_ms()` for synchronized flashing. |
 
 ### Key design decisions
 

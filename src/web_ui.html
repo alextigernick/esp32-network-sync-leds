@@ -132,6 +132,11 @@
     <div class="kv"><span>offset</span><span id="ts-offset">—</span></div>
     <div class="kv"><span>last RTT</span><span id="ts-rtt">—</span></div>
     <div class="kv"><span>syncs ok / fail</span><span id="ts-counts">—</span></div>
+    <canvas id="offset-plot" width="244" height="80"
+            style="margin-top:.8rem;border:1px solid #333;border-radius:4px;display:block"></canvas>
+    <div style="display:flex;justify-content:space-between;font-size:.7rem;color:#555;margin-top:.2rem">
+      <span id="plot-min">—</span><span>offset jitter</span><span id="plot-max">—</span>
+    </div>
   </div>
 
   <script>
@@ -170,6 +175,51 @@
       btn.dataset.enabled = on ? '1' : '0';
       btn.textContent = on ? 'Flash ON — tap to disable' : 'Flash OFF — tap to enable';
       btn.className = on ? 'btn-flash-on' : 'btn-flash-off';
+    }
+
+    // ---- offset plot -------------------------------------------------------
+    const PLOT_MAX = 120; // samples kept (~6 min at 3s poll)
+    const offsetHistory = [];
+
+    function drawOffsetPlot() {
+      const canvas = document.getElementById('offset-plot');
+      const ctx = canvas.getContext('2d');
+      const W = canvas.width, H = canvas.height;
+      ctx.clearRect(0, 0, W, H);
+
+      if (offsetHistory.length < 2) return;
+
+      const min = Math.min(...offsetHistory);
+      const max = Math.max(...offsetHistory);
+      const span = max - min || 1;
+      const pad = 6;
+
+      // Axis zero line
+      const zeroY = H - pad - ((0 - min) / span) * (H - 2 * pad);
+      ctx.strokeStyle = '#333';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(0, zeroY);
+      ctx.lineTo(W, zeroY);
+      ctx.stroke();
+
+      // Data line
+      ctx.strokeStyle = '#0f9';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      offsetHistory.forEach((v, i) => {
+        const x = (i / (PLOT_MAX - 1)) * W;
+        const y = H - pad - ((v - min) / span) * (H - 2 * pad);
+        i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+
+      // Labels
+      const fmt = us => Math.abs(us) >= 1000
+        ? (us / 1000).toFixed(2) + 'ms'
+        : us.toFixed(0) + 'µs';
+      document.getElementById('plot-min').textContent = fmt(min);
+      document.getElementById('plot-max').textContent = fmt(max);
     }
 
     async function fetchState() {
@@ -216,8 +266,14 @@
         // Time sync debug
         document.getElementById('ts-role').textContent = s.ts_role;
         document.getElementById('ts-ms').textContent = s.sync_ms + ' ms';
+        const offsetUs = s.ts_offset_us;
         document.getElementById('ts-offset').textContent =
-          s.ts_offset_us === undefined ? '—' : (s.ts_offset_us / 1000).toFixed(2) + ' ms';
+          offsetUs === undefined ? '—' : (offsetUs / 1000).toFixed(2) + ' ms';
+        if (offsetUs !== undefined && offsetUs >= -1e9) {
+          offsetHistory.push(offsetUs);
+          if (offsetHistory.length > PLOT_MAX) offsetHistory.shift();
+          drawOffsetPlot();
+        }
         const rttEl = document.getElementById('ts-rtt');
         if (s.ts_rtt_us < 0) {
           rttEl.textContent = 'never';
