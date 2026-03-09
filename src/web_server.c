@@ -1,7 +1,88 @@
+/*
+ * REST API
+ * --------
+ *
+ * GET /
+ *   Returns the embedded web UI (text/html).
+ *
+ * GET /state
+ *   Returns node state as JSON:
+ *     { "led": bool,
+ *       "sync_ms": uint64,
+ *       "ota_pending": bool,
+ *       "ts_role": "master"|"slave",
+ *       "ts_offset_us": int64,
+ *       "ts_rtt_us": int64,
+ *       "ts_sync_count": uint32,
+ *       "ts_fail_count": uint32,
+ *       "flash_enabled": bool,
+ *       "period_ms": uint32,
+ *       "duty_percent": uint8,
+ *       "r": uint8, "g": uint8, "b": uint8,
+ *       "peers": [{"name": str, "ip": str}, ...] }
+ *
+ * POST /led
+ *   Body (form-encoded): state=on | state=off
+ *   Turns GPIO 20 on or off immediately.
+ *   Response: 204 No Content
+ *
+ * POST /ota
+ *   Body: multipart/form-data with one file part containing a valid ESP-IDF
+ *   OTA firmware image (.bin). Node reboots into the new firmware on success.
+ *   Response: 200 "OK" (then reboots)
+ *
+ * POST /ota/verify
+ *   Marks the running firmware as valid, cancelling any pending rollback.
+ *   Response: 200 plain-text status message
+ *
+ * GET /settings
+ *   Returns current synchronized settings as URL-encoded form:
+ *     flash=0|1&period=<ms>&duty=<1-100>&r=<0-255>&g=<0-255>&b=<0-255>
+ *
+ * POST /settings[?fwd=0]
+ *   Body (form-encoded): same fields as GET response (all optional, current
+ *   values kept for missing fields).
+ *     flash=0|1            — enable/disable synchronized flashing
+ *     period=<100-10000>   — flash period in ms
+ *     duty=<1-100>         — on-time percentage per period
+ *     r=<0-255>            — LED red channel
+ *     g=<0-255>            — LED green channel
+ *     b=<0-255>            — LED blue channel
+ *   Applies locally and forwards to all peers unless ?fwd=0 is set.
+ *   Response: 204 No Content
+ *
+ * GET /node_config
+ *   Returns per-node config as JSON:
+ *     { "num_leds": uint16 }
+ *
+ * POST /node_config
+ *   Body (form-encoded): num_leds=<1-500>
+ *   Persists and applies LED strip length immediately.
+ *   Response: 204 No Content
+ *
+ * POST /led_pixel
+ *   Body (form-encoded): idx=<0-499> | idx=-1
+ *   Lights a single LED at the given index for visual identification;
+ *   idx=-1 turns off the test pixel.
+ *   Response: 204 No Content
+ *
+ * GET /pixel_layout
+ *   Returns the node's pixel position map as raw CSV (text/plain):
+ *     # comment lines ignored
+ *     <index>,<x_mm>,<y_mm>
+ *   One line per LED. Indices need not be contiguous or ordered.
+ *   Returns an empty body if no layout has been uploaded yet.
+ *
+ * POST /pixel_layout
+ *   Body (text/plain): CSV in the same format as GET.
+ *   Overwrites /spiffs/pixel_layout.csv and reloads the in-memory
+ *   position table. No size limit beyond the SPIFFS partition (448 KB).
+ *   Response: 204 No Content
+ */
+
 #include "web_server.h"
 #include "discovery.h"
 #include "node_config.h"
-#include "grid_config.h"
 #include "pixel_layout.h"
 #include "time_sync.h"
 #include "settings_sync.h"
@@ -314,49 +395,6 @@ static esp_err_t handle_led_pixel_post(httpd_req_t *req) {
     return ESP_OK;
 }
 
-// ---- /grid_config GET --------------------------------------------------
-
-static esp_err_t handle_grid_config_get(httpd_req_t *req) {
-    grid_config_t g;
-    grid_config_get(&g);
-    static char buf[96];
-    int len = snprintf(buf, sizeof(buf),
-        "{\"rows\":%u,\"cols\":%u,\"origin\":%u,\"row_first\":%u"
-        ",\"x_spacing_mm\":%.4g,\"y_spacing_mm\":%.4g}",
-        (unsigned)g.rows, (unsigned)g.cols,
-        (unsigned)g.origin, (unsigned)g.row_first,
-        (double)g.x_spacing_mm, (double)g.y_spacing_mm);
-    httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, buf, len);
-    return ESP_OK;
-}
-
-// ---- /grid_config POST -------------------------------------------------
-
-static esp_err_t handle_grid_config_post(httpd_req_t *req) {
-    char body[96] = {0};
-    int recv_len = req->content_len < (int)sizeof(body) - 1
-                   ? req->content_len : (int)sizeof(body) - 1;
-    if (recv_len > 0) httpd_req_recv(req, body, recv_len);
-
-    grid_config_t g;
-    grid_config_get(&g);  // start from current values
-
-    char *p;
-    if ((p = strstr(body, "rows=")))         g.rows         = (uint8_t) strtoul(p + 5,  NULL, 10);
-    if ((p = strstr(body, "cols=")))         g.cols         = (uint8_t) strtoul(p + 5,  NULL, 10);
-    if ((p = strstr(body, "origin=")))       g.origin       = (uint8_t) strtoul(p + 7,  NULL, 10);
-    if ((p = strstr(body, "row_first=")))    g.row_first    = (uint8_t) strtoul(p + 10, NULL, 10);
-    if ((p = strstr(body, "x_spacing_mm="))) g.x_spacing_mm = strtof(p + 13, NULL);
-    if ((p = strstr(body, "y_spacing_mm="))) g.y_spacing_mm = strtof(p + 13, NULL);
-
-    grid_config_save(&g);
-
-    httpd_resp_set_status(req, "204 No Content");
-    httpd_resp_send(req, NULL, 0);
-    return ESP_OK;
-}
-
 // ---- /pixel_layout GET -------------------------------------------------
 
 static esp_err_t handle_pixel_layout_get(httpd_req_t *req) {
@@ -416,7 +454,7 @@ void web_server_start(void) {
     config.stack_size        = 8192;
     config.recv_wait_timeout = 30;
     config.send_wait_timeout = 10;
-    config.max_uri_handlers  = 15;
+    config.max_uri_handlers  = 13;
     config.max_open_sockets  = 5;    // leave room for discovery/time_sync/forward_task sockets
     config.lru_purge_enable  = true; // recycle oldest idle socket when at max_open_sockets
 
@@ -438,8 +476,6 @@ void web_server_start(void) {
         { .uri = "/settings",     .method = HTTP_POST, .handler = handle_settings_post    },
         { .uri = "/node_config",  .method = HTTP_GET,  .handler = handle_node_config_get  },
         { .uri = "/node_config",  .method = HTTP_POST, .handler = handle_node_config_post },
-        { .uri = "/grid_config",    .method = HTTP_GET,  .handler = handle_grid_config_get    },
-        { .uri = "/grid_config",    .method = HTTP_POST, .handler = handle_grid_config_post   },
         { .uri = "/pixel_layout",   .method = HTTP_GET,  .handler = handle_pixel_layout_get   },
         { .uri = "/pixel_layout",   .method = HTTP_POST, .handler = handle_pixel_layout_post  },
         { .uri = "/led_pixel",      .method = HTTP_POST, .handler = handle_led_pixel_post     },

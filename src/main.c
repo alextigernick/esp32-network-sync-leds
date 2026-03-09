@@ -1,7 +1,6 @@
 #include "config.h"
 #include "discovery.h"
 #include "node_config.h"
-#include "grid_config.h"
 #include "pixel_layout.h"
 #include "time_sync.h"
 #include "settings_sync.h"
@@ -158,7 +157,6 @@ void app_main(void) {
     }
 
     node_config_load();
-    grid_config_load();
     pixel_layout_load();
 
     ESP_ERROR_CHECK(esp_netif_init());
