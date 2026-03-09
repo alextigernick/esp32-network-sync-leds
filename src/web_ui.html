@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>ESP32 Node</title>
+  <style>
+    body {
+      font-family: monospace;
+      background: #111;
+      color: #eee;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 2rem;
+      gap: 1.5rem;
+    }
+    h1 { margin: 0; font-size: 1.4rem; letter-spacing: .1em; color: #0f9; }
+    .card {
+      background: #1e1e1e;
+      border: 1px solid #333;
+      border-radius: 8px;
+      padding: 1.2rem 1.8rem;
+      width: 280px;
+    }
+    .card h2 {
+      margin: 0 0 1rem;
+      font-size: .9rem;
+      text-transform: uppercase;
+      color: #888;
+      letter-spacing: .08em;
+    }
+    button {
+      width: 100%;
+      padding: .8rem;
+      border: none;
+      border-radius: 6px;
+      font-size: 1rem;
+      cursor: pointer;
+      font-family: monospace;
+      transition: background .15s;
+      margin-top: .4rem;
+    }
+    .btn-on  { background: #0f9; color: #000; }
+    .btn-off { background: #333; color: #aaa; }
+    .btn-verify { background: #336; color: #99f; }
+    select {
+      width: 100%;
+      padding: .6rem;
+      background: #282828;
+      color: #eee;
+      border: 1px solid #444;
+      border-radius: 6px;
+      font-family: monospace;
+      font-size: .9rem;
+      cursor: pointer;
+    }
+    input[type=file] { width: 100%; color: #eee; margin-bottom: .8rem; }
+    .time { font-size: .8rem; color: #555; text-align: center; }
+    .badge {
+      display: inline-block;
+      font-size: .7rem;
+      padding: .15rem .5rem;
+      border-radius: 4px;
+      margin-left: .5rem;
+      vertical-align: middle;
+    }
+    .badge-pending { background: #530; color: #fa0; }
+    .badge-valid   { background: #030; color: #0f9; }
+  </style>
+</head>
+<body>
+  <h1>ESP32 NODE <span id="ota-badge"></span></h1>
+
+  <!-- LED control -->
+  <div class="card">
+    <h2>LED Control</h2>
+    <button id="led-btn" onclick="toggleLed()">...</button>
+  </div>
+
+  <!-- Peer navigator -->
+  <div class="card">
+    <h2>Other Nodes (<span id="peer-count">0</span> found)</h2>
+    <select id="peer-select" onchange="if(this.value) window.location='http://'+this.value">
+      <option value="">-- navigate to node --</option>
+    </select>
+  </div>
+
+  <!-- OTA update -->
+  <div class="card">
+    <h2>OTA Update</h2>
+    <form method="POST" action="/ota" enctype="multipart/form-data">
+      <input type="file" name="firmware" accept=".bin">
+      <button class="btn-off" type="submit">Flash Firmware</button>
+    </form>
+    <button class="btn-verify" onclick="verify()">Verify &amp; Cancel Rollback</button>
+  </div>
+
+  <p class="time" id="sync-time">sync time: —</p>
+
+  <script>
+    async function fetchState() {
+      try {
+        const r = await fetch('/state');
+        if (!r.ok) return;
+        const s = await r.json();
+
+        // LED button
+        const btn = document.getElementById('led-btn');
+        if (s.led) {
+          btn.textContent = 'LED is ON — tap to turn OFF';
+          btn.className = 'btn-on';
+        } else {
+          btn.textContent = 'LED is OFF — tap to turn ON';
+          btn.className = 'btn-off';
+        }
+
+        // Peers
+        document.getElementById('peer-count').textContent = s.peers.length;
+        const sel = document.getElementById('peer-select');
+        sel.innerHTML = '<option value="">-- navigate to node --</option>';
+        s.peers.forEach(p => {
+          const o = document.createElement('option');
+          o.value = p.ip;
+          o.textContent = p.name + '  (' + p.ip + ')';
+          sel.appendChild(o);
+        });
+
+        // Sync time
+        document.getElementById('sync-time').textContent = 'sync time: ' + s.sync_ms + ' ms';
+
+        // OTA pending badge
+        const badge = document.getElementById('ota-badge');
+        if (s.ota_pending) {
+          badge.textContent = 'PENDING VERIFY';
+          badge.className = 'badge badge-pending';
+        } else {
+          badge.textContent = 'verified';
+          badge.className = 'badge badge-valid';
+        }
+      } catch (e) {
+        console.warn('state fetch failed', e);
+      }
+    }
+
+    async function toggleLed() {
+      const btn = document.getElementById('led-btn');
+      const turningOn = btn.className === 'btn-off';
+      await fetch('/led', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+        body: 'state=' + (turningOn ? 'on' : 'off'),
+      });
+      await fetchState();
+    }
+
+    async function verify() {
+      const r = await fetch('/ota/verify', {method: 'POST'});
+      const msg = await r.text();
+      alert(msg);
+      await fetchState();
+    }
+
+    fetchState();
+    setInterval(fetchState, 3000);
+  </script>
+</body>
+</html>

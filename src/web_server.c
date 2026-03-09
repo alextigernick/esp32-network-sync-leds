@@ -9,8 +9,14 @@
 #include "driver/gpio.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
+#include "esp_ota_ops.h"
+#include "esp_system.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 #define TAG "web_server"
+
+#include "web_ui_html.h"
 
 static bool s_led_on = false;
 
@@ -19,115 +25,169 @@ static void led_set(bool on) {
     gpio_set_level(LED_GPIO, on ? 1 : 0);
 }
 
-// ---- HTML page ---------------------------------------------------------
+// ---- /state JSON endpoint ----------------------------------------------
 
-// Writes the full page into buf (max buf_size). Returns bytes written.
-static int build_page(char *buf, size_t buf_size) {
+static esp_err_t handle_state(httpd_req_t *req) {
     peer_t peers[MAX_PEERS];
     int peer_count = discovery_get_peers(peers, MAX_PEERS);
     uint64_t sync_ms = time_sync_get_ms();
 
+    // Check OTA pending-verify state
+    esp_ota_img_states_t ota_state = ESP_OTA_IMG_VALID;
+    const esp_partition_t *running = esp_ota_get_running_partition();
+    esp_ota_get_state_partition(running, &ota_state);
+    bool ota_pending = (ota_state == ESP_OTA_IMG_PENDING_VERIFY);
+
+    static char buf[1024];
     int pos = 0;
 
-#define APPEND(...) pos += snprintf(buf + pos, buf_size - pos, __VA_ARGS__)
+#define A(...) pos += snprintf(buf + pos, sizeof(buf) - pos, __VA_ARGS__)
 
-    APPEND(
-        "<!DOCTYPE html><html><head>"
-        "<meta charset='utf-8'>"
-        "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-        "<title>ESP32 Control</title>"
-        "<style>"
-        "  body{font-family:monospace;background:#111;color:#eee;display:flex;"
-        "       flex-direction:column;align-items:center;padding:2rem;gap:1.5rem;}"
-        "  h1{margin:0;font-size:1.4rem;letter-spacing:.1em;color:#0f9;}"
-        "  .card{background:#1e1e1e;border:1px solid #333;border-radius:8px;"
-        "        padding:1.2rem 1.8rem;width:280px;}"
-        "  .card h2{margin:0 0 1rem;font-size:.9rem;text-transform:uppercase;"
-        "           color:#888;letter-spacing:.08em;}"
-        "  button{width:100%%;padding:.8rem;border:none;border-radius:6px;"
-        "         font-size:1rem;cursor:pointer;font-family:monospace;"
-        "         transition:background .15s;}"
-        "  .on {background:#0f9;color:#000;}"
-        "  .off{background:#333;color:#aaa;}"
-        "  select{width:100%%;padding:.6rem;background:#282828;color:#eee;"
-        "         border:1px solid #444;border-radius:6px;font-family:monospace;"
-        "         font-size:.9rem;cursor:pointer;}"
-        "  .time{font-size:.8rem;color:#555;text-align:center;}"
-        "</style></head><body>"
-    );
+    A("{\"led\":%s,\"sync_ms\":%llu,\"ota_pending\":%s,\"peers\":[",
+      s_led_on ? "true" : "false",
+      (unsigned long long)sync_ms,
+      ota_pending ? "true" : "false");
 
-    APPEND("<h1>ESP32 NODE</h1>");
-
-    // LED control card
-    APPEND(
-        "<div class='card'>"
-        "<h2>LED Control</h2>"
-        "<form method='POST' action='/led'>"
-        "<button class='%s' name='state' value='%s'>LED is %s — tap to turn %s</button>"
-        "</form></div>",
-        s_led_on ? "on" : "off",
-        s_led_on ? "off" : "on",
-        s_led_on ? "ON" : "OFF",
-        s_led_on ? "OFF" : "ON"
-    );
-
-    // Peer navigator card
-    APPEND(
-        "<div class='card'>"
-        "<h2>Other Nodes (%d found)</h2>", peer_count
-    );
-
-    if (peer_count == 0) {
-        APPEND("<select disabled><option>No peers yet...</option></select>");
-    } else {
-        APPEND("<select onchange=\"if(this.value)window.location='http://'+this.value\">"
-               "<option value=''>-- navigate to node --</option>");
-        for (int i = 0; i < peer_count; i++) {
-            APPEND("<option value='%s'>%s  (%s)</option>",
-                   peers[i].ip, peers[i].name, peers[i].ip);
-        }
-        APPEND("</select>");
+    for (int i = 0; i < peer_count; i++) {
+        A("%s{\"name\":\"%s\",\"ip\":\"%s\"}",
+          i > 0 ? "," : "", peers[i].name, peers[i].ip);
     }
+    A("]}");
 
-    APPEND("</div>");
+#undef A
 
-    // Sync time display
-    APPEND("<p class='time'>sync time: %llu ms</p>", (unsigned long long)sync_ms);
-
-    APPEND("</body></html>");
-
-#undef APPEND
-    return pos;
-}
-
-// ---- HTTP handlers -----------------------------------------------------
-
-static esp_err_t handle_get(httpd_req_t *req) {
-    static char buf[4096];
-    int len = build_page(buf, sizeof(buf));
-    httpd_resp_set_type(req, "text/html");
-    httpd_resp_send(req, buf, len);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, buf, pos);
     return ESP_OK;
 }
 
+// ---- / HTML page -------------------------------------------------------
+
+static esp_err_t handle_get(httpd_req_t *req) {
+    httpd_resp_set_type(req, "text/html");
+    httpd_resp_send(req, web_ui_html, web_ui_html_len);
+    return ESP_OK;
+}
+
+// ---- /led POST ---------------------------------------------------------
+
 static esp_err_t handle_led_post(httpd_req_t *req) {
     char body[64] = {0};
-    int recv_len = req->content_len < (int)sizeof(body) - 1 ? req->content_len : (int)sizeof(body) - 1;
-    if (recv_len > 0) {
-        httpd_req_recv(req, body, recv_len);
-    }
+    int recv_len = req->content_len < (int)sizeof(body) - 1
+                   ? req->content_len : (int)sizeof(body) - 1;
+    if (recv_len > 0) httpd_req_recv(req, body, recv_len);
 
-    // Parse "state=on" or "state=off"
-    if (strstr(body, "state=on")) {
-        led_set(true);
-    } else if (strstr(body, "state=off")) {
-        led_set(false);
-    }
+    if      (strstr(body, "state=on"))  led_set(true);
+    else if (strstr(body, "state=off")) led_set(false);
 
-    // Redirect back to main page
-    httpd_resp_set_status(req, "303 See Other");
-    httpd_resp_set_hdr(req, "Location", "/");
+    httpd_resp_set_status(req, "204 No Content");
     httpd_resp_send(req, NULL, 0);
+    return ESP_OK;
+}
+
+// ---- /ota POST ---------------------------------------------------------
+
+static esp_err_t handle_ota_post(httpd_req_t *req) {
+    esp_ota_handle_t ota_handle;
+    const esp_partition_t *update_part = esp_ota_get_next_update_partition(NULL);
+    if (!update_part) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "No OTA partition");
+        return ESP_FAIL;
+    }
+
+    esp_err_t err = esp_ota_begin(update_part, OTA_WITH_SEQUENTIAL_WRITES, &ota_handle);
+    if (err != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OTA begin failed");
+        return ESP_FAIL;
+    }
+
+    static char buf[1024];
+    int remaining = req->content_len;
+    bool first_chunk = true;
+
+    // multipart/form-data: skip past the part headers (\r\n\r\n) before writing
+    bool header_skipped = false;
+    static char header_buf[512];
+    int header_pos = 0;
+
+    while (remaining > 0) {
+        int to_read = remaining < (int)sizeof(buf) ? remaining : (int)sizeof(buf);
+        int received = httpd_req_recv(req, buf, to_read);
+        if (received <= 0) {
+            esp_ota_abort(ota_handle);
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Receive error");
+            return ESP_FAIL;
+        }
+        remaining -= received;
+
+        char *data = buf;
+        int data_len = received;
+
+        if (!header_skipped) {
+            int copy = received < (int)(sizeof(header_buf) - header_pos - 1)
+                       ? received : (int)(sizeof(header_buf) - header_pos - 1);
+            memcpy(header_buf + header_pos, buf, copy);
+            header_pos += copy;
+            header_buf[header_pos] = '\0';
+
+            char *sep = strstr(header_buf, "\r\n\r\n");
+            if (sep) {
+                header_skipped = true;
+                int skip = (sep + 4) - header_buf;
+                int buf_skip = skip - (header_pos - received);
+                if (buf_skip < 0) buf_skip = 0;
+                data = buf + buf_skip;
+                data_len = received - buf_skip;
+            } else {
+                continue;
+            }
+        }
+
+        if (data_len <= 0) continue;
+
+        if (first_chunk) {
+            first_chunk = false;
+            if (data_len >= 1 && (uint8_t)data[0] != 0xE9) {
+                esp_ota_abort(ota_handle);
+                httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Not a valid firmware image");
+                return ESP_FAIL;
+            }
+        }
+
+        err = esp_ota_write(ota_handle, data, data_len);
+        if (err != ESP_OK) {
+            esp_ota_abort(ota_handle);
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OTA write failed");
+            return ESP_FAIL;
+        }
+    }
+
+    if (esp_ota_end(ota_handle) != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "OTA end failed");
+        return ESP_FAIL;
+    }
+    if (esp_ota_set_boot_partition(update_part) != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Set boot partition failed");
+        return ESP_FAIL;
+    }
+
+    httpd_resp_set_type(req, "text/plain");
+    httpd_resp_sendstr(req, "OK");
+    vTaskDelay(pdMS_TO_TICKS(500));
+    esp_restart();
+    return ESP_OK;
+}
+
+// ---- /ota/verify POST --------------------------------------------------
+
+static esp_err_t handle_ota_verify(httpd_req_t *req) {
+    esp_err_t err = esp_ota_mark_app_valid_cancel_rollback();
+    ESP_LOGI(TAG, "OTA verify: %s", err == ESP_OK ? "marked valid" : "already valid");
+    const char *msg = (err == ESP_OK)
+        ? "Firmware marked valid. Rollback cancelled."
+        : "Already valid or rollback not enabled.";
+    httpd_resp_set_type(req, "text/plain");
+    httpd_resp_sendstr(req, msg);
     return ESP_OK;
 }
 
@@ -135,7 +195,6 @@ static esp_err_t handle_led_post(httpd_req_t *req) {
 
 void web_server_start(void) {
     ESP_LOGI(TAG, "Configuring LED GPIO %d", LED_GPIO);
-    // Configure LED GPIO
     gpio_config_t io = {
         .pin_bit_mask = 1ULL << LED_GPIO,
         .mode         = GPIO_MODE_OUTPUT,
@@ -145,8 +204,11 @@ void web_server_start(void) {
     led_set(false);
     ESP_LOGI(TAG, "led_set ok");
 
-    httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.stack_size = 8192;
+    httpd_config_t config    = HTTPD_DEFAULT_CONFIG();
+    config.stack_size        = 8192;
+    config.recv_wait_timeout = 30;
+    config.send_wait_timeout = 10;
+    config.max_uri_handlers  = 8;
 
     ESP_LOGI(TAG, "Starting httpd...");
     httpd_handle_t server = NULL;
@@ -156,19 +218,16 @@ void web_server_start(void) {
     }
     ESP_LOGI(TAG, "httpd started");
 
-    httpd_uri_t uri_get = {
-        .uri     = "/",
-        .method  = HTTP_GET,
-        .handler = handle_get,
+    httpd_uri_t routes[] = {
+        { .uri = "/",           .method = HTTP_GET,  .handler = handle_get        },
+        { .uri = "/state",      .method = HTTP_GET,  .handler = handle_state      },
+        { .uri = "/led",        .method = HTTP_POST, .handler = handle_led_post   },
+        { .uri = "/ota",        .method = HTTP_POST, .handler = handle_ota_post   },
+        { .uri = "/ota/verify", .method = HTTP_POST, .handler = handle_ota_verify },
     };
-    httpd_register_uri_handler(server, &uri_get);
-
-    httpd_uri_t uri_led = {
-        .uri     = "/led",
-        .method  = HTTP_POST,
-        .handler = handle_led_post,
-    };
-    httpd_register_uri_handler(server, &uri_led);
+    for (int i = 0; i < (int)(sizeof(routes)/sizeof(routes[0])); i++) {
+        httpd_register_uri_handler(server, &routes[i]);
+    }
 
     ESP_LOGI(TAG, "HTTP server started on port %d", config.server_port);
 }
