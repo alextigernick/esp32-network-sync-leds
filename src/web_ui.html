@@ -86,6 +86,23 @@
       border: 1px solid #333;
       transition: background .1s;
     }
+    .card.grid-card { width: auto; min-width: 280px; max-width: 90vw; }
+    .grid-inp {
+      width: 3.5rem; padding: .3rem .4rem;
+      background: #282828; color: #eee;
+      border: 1px solid #444; border-radius: 6px;
+      font-family: monospace; font-size: .9rem; text-align: center;
+    }
+    #grid-table { border-collapse: collapse; margin-top: .8rem; font-size: .75rem; }
+    #grid-table td {
+      border: 1px solid #333; width: 2rem; height: 1.6rem;
+      text-align: center; color: #0f9;
+      font-variant-numeric: tabular-nums;
+      cursor: pointer;
+    }
+    #grid-table td:hover { background: #2a2a2a; }
+    #grid-table td.row-rev { color: #f90; }
+    #grid-table td.lit { background: #1a3a1a; outline: 1px solid #0f9; }
   </style>
 </head>
 <body>
@@ -145,6 +162,38 @@
       <span class="val" style="min-width:2rem">LEDs</span>
     </div>
     <button class="btn-off" style="margin-top:.6rem" onclick="saveNodeConfig()">Save</button>
+  </div>
+
+  <!-- Grid config -->
+  <div class="card grid-card">
+    <h2>Grid Layout</h2>
+    <div class="row">
+      <label>Rows</label>
+      <input type="number" class="grid-inp" id="grid-rows" min="1" max="32" value="4">
+      <label style="margin-left:.6rem">Cols</label>
+      <input type="number" class="grid-inp" id="grid-cols" min="1" max="32" value="8">
+    </div>
+    <div class="row" style="margin-top:.4rem">
+      <label>Origin</label>
+      <select id="grid-origin" style="flex:1;padding:.3rem .4rem;background:#282828;color:#eee;border:1px solid #444;border-radius:6px;font-family:monospace;font-size:.85rem">
+        <option value="0">Top-left</option>
+        <option value="1">Top-right</option>
+        <option value="2">Bottom-left</option>
+        <option value="3">Bottom-right</option>
+      </select>
+    </div>
+    <div class="row" style="margin-top:.4rem">
+      <label>Direction</label>
+      <select id="grid-dir" style="flex:1;padding:.3rem .4rem;background:#282828;color:#eee;border:1px solid #444;border-radius:6px;font-family:monospace;font-size:.85rem">
+        <option value="1">Row-first (L↔R)</option>
+        <option value="0">Col-first (T↕B)</option>
+      </select>
+    </div>
+    <div style="font-size:.75rem;color:#555;margin-top:.4rem">
+      Green = forward run &nbsp;·&nbsp; <span style="color:#f90">Orange</span> = reversed run
+    </div>
+    <div style="overflow-x:auto"><table id="grid-table"></table></div>
+    <button class="btn-off" style="margin-top:.8rem" onclick="saveGridConfig()">Save</button>
   </div>
 
   <!-- Peer navigator -->
@@ -401,9 +450,114 @@
       });
     }
 
+    // ---- grid config -------------------------------------------------------
+
+    let _litPixel = null;
+
+    async function tapPixel(td, idx) {
+      if (_litPixel !== null) _litPixel.classList.remove('lit');
+      if (_litPixel === td) {
+        // second tap on same cell → turn off
+        _litPixel = null;
+        await fetch('/led_pixel', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+          body: 'idx=-1',
+        });
+        return;
+      }
+      _litPixel = td;
+      td.classList.add('lit');
+      await fetch('/led_pixel', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+        body: `idx=${idx}`,
+      });
+    }
+
+    function renderGrid() {
+      const rows      = Math.max(1, Math.min(32, +document.getElementById('grid-rows').value   || 4));
+      const cols      = Math.max(1, Math.min(32, +document.getElementById('grid-cols').value   || 8));
+      const origin    = +document.getElementById('grid-origin').value;
+      const rowFirst  = +document.getElementById('grid-dir').value;
+
+      // origin bits: bit1 = flip rows, bit0 = flip cols
+      const flipRows = (origin === 2 || origin === 3);
+      const flipCols = (origin === 1 || origin === 3);
+
+      // ledIndex(r, c) → physical LED index for grid position (row r, col c)
+      function ledIndex(r, c) {
+        // apply origin flip to get run/position within a line
+        const pr = flipRows ? (rows - 1 - r) : r;
+        const pc = flipCols ? (cols - 1 - c) : c;
+        if (rowFirst) {
+          // run = pr, position within run = pc; even runs go forward, odd reversed
+          const pos = (pr % 2 === 0) ? pc : (cols - 1 - pc);
+          return pr * cols + pos;
+        } else {
+          // run = pc, position within run = pr; even runs go forward, odd reversed
+          const pos = (pc % 2 === 0) ? pr : (rows - 1 - pr);
+          return pc * rows + pos;
+        }
+      }
+
+      // isReversed(r, c) → true if this cell is on a reversed run
+      function isReversed(r, c) {
+        const pr = flipRows ? (rows - 1 - r) : r;
+        const pc = flipCols ? (cols - 1 - c) : c;
+        return rowFirst ? (pr % 2 !== 0) : (pc % 2 !== 0);
+      }
+
+      _litPixel = null;
+      const tbl = document.getElementById('grid-table');
+      tbl.innerHTML = '';
+      for (let r = 0; r < rows; r++) {
+        const tr = document.createElement('tr');
+        for (let c = 0; c < cols; c++) {
+          const td = document.createElement('td');
+          const idx = ledIndex(r, c);
+          td.textContent = idx;
+          if (isReversed(r, c)) td.className = 'row-rev';
+          td.onclick = () => tapPixel(td, idx);
+          tr.appendChild(td);
+        }
+        tbl.appendChild(tr);
+      }
+    }
+
+    // Re-render whenever any input changes
+    ['grid-rows','grid-cols','grid-origin','grid-dir'].forEach(id =>
+      document.getElementById(id).addEventListener('input', renderGrid));
+
+    async function fetchGridConfig() {
+      try {
+        const r = await fetch('/grid_config');
+        if (!r.ok) return;
+        const g = await r.json();
+        document.getElementById('grid-rows').value   = g.rows;
+        document.getElementById('grid-cols').value   = g.cols;
+        document.getElementById('grid-origin').value = g.origin;
+        document.getElementById('grid-dir').value    = g.row_first;
+        renderGrid();
+      } catch (e) { console.warn('grid_config fetch failed', e); }
+    }
+
+    async function saveGridConfig() {
+      const rows     = document.getElementById('grid-rows').value;
+      const cols     = document.getElementById('grid-cols').value;
+      const origin   = document.getElementById('grid-origin').value;
+      const rowFirst = document.getElementById('grid-dir').value;
+      await fetch('/grid_config', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+        body: `rows=${rows}&cols=${cols}&origin=${origin}&row_first=${rowFirst}`,
+      });
+    }
+
     updateColor();
     fetchState();
     fetchNodeConfig();
+    fetchGridConfig();
     setInterval(fetchState, 3000);
   </script>
 </body>

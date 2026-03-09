@@ -1,6 +1,7 @@
 #include "web_server.h"
 #include "discovery.h"
 #include "node_config.h"
+#include "grid_config.h"
 #include "time_sync.h"
 #include "settings_sync.h"
 #include "config.h"
@@ -295,6 +296,62 @@ static esp_err_t handle_node_config_post(httpd_req_t *req) {
     return ESP_OK;
 }
 
+// ---- /led_pixel POST ---------------------------------------------------
+
+static esp_err_t handle_led_pixel_post(httpd_req_t *req) {
+    char body[32] = {0};
+    int recv_len = req->content_len < (int)sizeof(body) - 1
+                   ? req->content_len : (int)sizeof(body) - 1;
+    if (recv_len > 0) httpd_req_recv(req, body, recv_len);
+
+    char *p = strstr(body, "idx=");
+    int idx = p ? (int)strtol(p + 4, NULL, 10) : -1;
+    led_set_pixel(idx);
+
+    httpd_resp_set_status(req, "204 No Content");
+    httpd_resp_send(req, NULL, 0);
+    return ESP_OK;
+}
+
+// ---- /grid_config GET --------------------------------------------------
+
+static esp_err_t handle_grid_config_get(httpd_req_t *req) {
+    grid_config_t g;
+    grid_config_get(&g);
+    static char buf[64];
+    int len = snprintf(buf, sizeof(buf),
+        "{\"rows\":%u,\"cols\":%u,\"origin\":%u,\"row_first\":%u}",
+        (unsigned)g.rows, (unsigned)g.cols,
+        (unsigned)g.origin, (unsigned)g.row_first);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, buf, len);
+    return ESP_OK;
+}
+
+// ---- /grid_config POST -------------------------------------------------
+
+static esp_err_t handle_grid_config_post(httpd_req_t *req) {
+    char body[64] = {0};
+    int recv_len = req->content_len < (int)sizeof(body) - 1
+                   ? req->content_len : (int)sizeof(body) - 1;
+    if (recv_len > 0) httpd_req_recv(req, body, recv_len);
+
+    grid_config_t g;
+    grid_config_get(&g);  // start from current values
+
+    char *p;
+    if ((p = strstr(body, "rows=")))      g.rows      = (uint8_t)strtoul(p + 5, NULL, 10);
+    if ((p = strstr(body, "cols=")))      g.cols      = (uint8_t)strtoul(p + 5, NULL, 10);
+    if ((p = strstr(body, "origin=")))    g.origin    = (uint8_t)strtoul(p + 7, NULL, 10);
+    if ((p = strstr(body, "row_first="))) g.row_first = (uint8_t)strtoul(p + 10, NULL, 10);
+
+    grid_config_save(&g);
+
+    httpd_resp_set_status(req, "204 No Content");
+    httpd_resp_send(req, NULL, 0);
+    return ESP_OK;
+}
+
 // ---- start -------------------------------------------------------------
 
 void web_server_start(void) {
@@ -304,7 +361,9 @@ void web_server_start(void) {
     config.stack_size        = 8192;
     config.recv_wait_timeout = 30;
     config.send_wait_timeout = 10;
-    config.max_uri_handlers  = 12;
+    config.max_uri_handlers  = 15;
+    config.max_open_sockets  = 5;    // leave room for discovery/time_sync/forward_task sockets
+    config.lru_purge_enable  = true; // recycle oldest idle socket when at max_open_sockets
 
     ESP_LOGI(TAG, "Starting httpd...");
     httpd_handle_t server = NULL;
@@ -324,6 +383,9 @@ void web_server_start(void) {
         { .uri = "/settings",     .method = HTTP_POST, .handler = handle_settings_post    },
         { .uri = "/node_config",  .method = HTTP_GET,  .handler = handle_node_config_get  },
         { .uri = "/node_config",  .method = HTTP_POST, .handler = handle_node_config_post },
+        { .uri = "/grid_config",  .method = HTTP_GET,  .handler = handle_grid_config_get  },
+        { .uri = "/grid_config",  .method = HTTP_POST, .handler = handle_grid_config_post },
+        { .uri = "/led_pixel",    .method = HTTP_POST, .handler = handle_led_pixel_post   },
     };
     for (int i = 0; i < (int)(sizeof(routes)/sizeof(routes[0])); i++) {
         httpd_register_uri_handler(server, &routes[i]);

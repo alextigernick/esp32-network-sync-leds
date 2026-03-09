@@ -25,7 +25,7 @@ static settings_t      s_settings = {
     .flash_enabled = false,
     .period_ms     = 1000,
     .duty_percent  = 50,
-    .r = 255, .g = 255, .b = 255,
+    .r = 10, .g = 0, .b = 0,
 };
 static SemaphoreHandle_t s_mutex;
 static QueueHandle_t     s_forward_queue; // queue of settings_t to forward

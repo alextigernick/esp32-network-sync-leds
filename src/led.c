@@ -23,6 +23,7 @@ static rmt_encoder_handle_t s_encoder = NULL;
 static uint8_t   s_pixels[MAX_LEDS * 3];
 static uint16_t  s_num_leds = NUM_LEDS;
 static uint8_t   s_r = 10, s_g = 0, s_b = 0;
+static bool      s_probe_mode = false; // when true, led_set() is suppressed
 
 void led_init(void) {
     rmt_tx_channel_config_t chan_cfg = {
@@ -65,7 +66,21 @@ void led_set_count(uint16_t n) {
     s_num_leds = n;
 }
 
+void led_set_pixel(int idx) {
+    s_probe_mode = (idx >= 0);
+    memset(s_pixels, 0, s_num_leds * 3);
+    if (idx >= 0 && idx < s_num_leds) {
+        s_pixels[idx * 3 + 0] = s_g; // GRB order
+        s_pixels[idx * 3 + 1] = s_r;
+        s_pixels[idx * 3 + 2] = s_b;
+    }
+    rmt_transmit_config_t tx_cfg = { .loop_count = 0 };
+    rmt_tx_wait_all_done(s_chan, 10);
+    rmt_transmit(s_chan, s_encoder, s_pixels, s_num_leds * 3, &tx_cfg);
+}
+
 void led_set(bool on) {
+    if (s_probe_mode) return;
     if (on) {
         for (int i = 0; i < s_num_leds; i++) {
             s_pixels[i * 3 + 0] = s_g; // GRB order
