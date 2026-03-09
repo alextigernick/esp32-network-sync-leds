@@ -555,7 +555,13 @@
       const scale  = Math.min((W - 2*PAD) / rangeX, (H - 2*PAD) / rangeY);
       const sx = x => PAD + (x - minX) * scale;
       const sy = y => PAD + (y - minY) * scale;
+      // Draw wiring order lines (sorted by LED index)
+      const sorted = [...points].sort((a, b) => a.idx - b.idx);
       let html = '';
+      for (let i = 1; i < sorted.length; i++) {
+        const a = sorted[i - 1], b = sorted[i];
+        html += `<line x1="${sx(a.x).toFixed(1)}" y1="${sy(a.y).toFixed(1)}" x2="${sx(b.x).toFixed(1)}" y2="${sy(b.y).toFixed(1)}" stroke="#444" stroke-width="1"/>`;
+      }
       for (const p of points) {
         const active = p.idx === _activePixelIdx;
         html += `<circle cx="${sx(p.x).toFixed(1)}" cy="${sy(p.y).toFixed(1)}" r="${active ? 5 : 3}" fill="${active ? '#ff0' : '#0f9'}" opacity="0.85" style="cursor:pointer" data-idx="${p.idx}" onclick="setPixel(${p.idx})"><title>${p.idx}: (${p.x}, ${p.y})</title></circle>`;
