@@ -524,6 +524,25 @@
       return pts;
     }
 
+    let _activePixelIdx = -1;
+
+    async function setPixel(idx) {
+      // Toggle off if clicking the already-active pixel
+      const next = (idx === _activePixelIdx) ? -1 : idx;
+      _activePixelIdx = next;
+      await fetch('/led_pixel', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+        body: 'idx=' + next,
+      });
+      // Update circle colours without a full re-render
+      document.querySelectorAll('#layout-plot circle').forEach(c => {
+        const active = +c.dataset.idx === _activePixelIdx;
+        c.setAttribute('fill', active ? '#ff0' : '#0f9');
+        c.setAttribute('r', active ? '5' : '3');
+      });
+    }
+
     function renderLayoutPlot(points) {
       const svg = document.getElementById('layout-plot');
       const W = svg.clientWidth || 300, H = svg.clientHeight || 200;
@@ -538,7 +557,8 @@
       const sy = y => PAD + (y - minY) * scale;
       let html = '';
       for (const p of points) {
-        html += `<circle cx="${sx(p.x).toFixed(1)}" cy="${sy(p.y).toFixed(1)}" r="3" fill="#0f9" opacity="0.85"><title>${p.idx}: (${p.x}, ${p.y})</title></circle>`;
+        const active = p.idx === _activePixelIdx;
+        html += `<circle cx="${sx(p.x).toFixed(1)}" cy="${sy(p.y).toFixed(1)}" r="${active ? 5 : 3}" fill="${active ? '#ff0' : '#0f9'}" opacity="0.85" style="cursor:pointer" data-idx="${p.idx}" onclick="setPixel(${p.idx})"><title>${p.idx}: (${p.x}, ${p.y})</title></circle>`;
       }
       svg.innerHTML = html;
     }
