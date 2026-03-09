@@ -41,8 +41,11 @@ All nodes run identical firmware. On boot, each node attempts to join the WiFi n
 | `src/config.h` | All tunables: SSID, password, GPIO, ports, timeouts |
 | `src/discovery.c/h` | UDP multicast peer discovery (`239.0.0.1:5000`). Two tasks: announce (sends own IP/name every 3s) and listen (receives peers, expires stale ones) |
 | `src/time_sync.c/h` | UDP time sync on port 5001. Master serves current ms timestamp on request; slaves poll every 5s and apply RTT-corrected offset to `esp_timer_get_time()` |
-| `src/web_server.c/h` | ESP-IDF `esp_http_server`. GET `/` serves control page; POST `/led` toggles GPIO 20; POST `/ota` accepts multipart firmware upload and reboots. GET/POST `/settings` for synchronized settings. Page shows LED toggle, flash control, peer dropdown, OTA form |
-| `src/settings_sync.c/h` | Synchronized settings. `settings_t` holds all shared state; `settings_apply_and_forward()` applies locally then pushes to all peers via HTTP POST `/settings?fwd=0`. `flash_task` drives GPIO 20 based on `time_sync_get_ms()` for synchronized flashing. |
+| `src/web_server.c/h` | ESP-IDF `esp_http_server`. GET `/` serves control page; POST `/led` toggles GPIO 20; POST `/ota` accepts multipart firmware upload and reboots. GET/POST `/settings` for synchronized settings. GET `/state` returns JSON with full state including mode, pattern params, palette, and peers. |
+| `src/settings_sync.c/h` | Synchronized settings. `settings_t` holds all shared state; `settings_apply_and_forward()` applies locally then pushes to all peers via HTTP POST `/settings?fwd=0`. `flash_task` runs at 10 ms resolution driving WS2812B strip for all modes. |
+| `src/led.c/h` | WS2812B strip driver via RMT. `led_set(bool)` uniform color, `led_set_pixel(int)` probe mode, `led_write_rgb(const uint8_t*, int)` per-pixel RGB buffer. |
+| `src/pixel_layout.c/h` | Per-node pixel position map loaded from `/spiffs/pixel_layout.csv` (index, x_mm, y_mm). `pixel_layout_get(i, &x, &y)` used by pattern renderer. |
+| `src/perlin.c/h` | Pure-C fixed-point Perlin noise (16.16 format). `perlin_sample(x_mm, y_mm, time_s, scale_mm, speed, octaves)` returns [0,255] via fBm with normalization by geometric amplitude sum. |
 
 ### Key design decisions
 
