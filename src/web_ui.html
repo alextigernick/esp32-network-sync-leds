@@ -71,6 +71,12 @@
     .kv span:first-child { color: #888; }
     .kv span:last-child  { color: #cfc; font-variant-numeric: tabular-nums; }
     .kv span.stale { color: #fa0; }
+    .row { display: flex; align-items: center; gap: .6rem; margin: .4rem 0; }
+    .row label { color: #888; font-size: .85rem; min-width: 4.5rem; }
+    .row input[type=range] { flex: 1; accent-color: #0f9; }
+    .row .val { color: #cfc; font-size: .85rem; min-width: 4rem; text-align: right; font-variant-numeric: tabular-nums; }
+    .btn-flash-on  { background: #0f9; color: #000; }
+    .btn-flash-off { background: #333; color: #aaa; }
   </style>
 </head>
 <body>
@@ -80,6 +86,24 @@
   <div class="card">
     <h2>LED Control</h2>
     <button id="led-btn" onclick="toggleLed()">...</button>
+  </div>
+
+  <!-- Synchronized flash -->
+  <div class="card">
+    <h2>Synchronized Flash</h2>
+    <button id="flash-btn" onclick="toggleFlash()">...</button>
+    <div class="row" style="margin-top:.8rem">
+      <label>Period</label>
+      <input type="range" id="period-sl" min="100" max="10000" step="100" value="1000"
+             oninput="updateSliderLabel('period-sl','period-val',v=>v/1000+'s'); scheduleSettingsPush()">
+      <span class="val" id="period-val">1.0s</span>
+    </div>
+    <div class="row">
+      <label>Duty</label>
+      <input type="range" id="duty-sl" min="1" max="100" step="1" value="50"
+             oninput="updateSliderLabel('duty-sl','duty-val',v=>v+'%'); scheduleSettingsPush()">
+      <span class="val" id="duty-val">50%</span>
+    </div>
   </div>
 
   <!-- Peer navigator -->
@@ -111,6 +135,43 @@
   </div>
 
   <script>
+    let _pushTimer = null;
+    function scheduleSettingsPush() {
+      clearTimeout(_pushTimer);
+      _pushTimer = setTimeout(pushSettings, 300);
+    }
+
+    function updateSliderLabel(sliderId, labelId, fmt) {
+      const v = +document.getElementById(sliderId).value;
+      document.getElementById(labelId).textContent = fmt(v);
+    }
+
+    async function pushSettings(forward = true) {
+      const flash   = document.getElementById('flash-btn').dataset.enabled === '1' ? 1 : 0;
+      const period  = document.getElementById('period-sl').value;
+      const duty    = document.getElementById('duty-sl').value;
+      const url     = forward ? '/settings' : '/settings?fwd=0';
+      await fetch(url, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+        body: `flash=${flash}&period=${period}&duty=${duty}`,
+      });
+    }
+
+    async function toggleFlash() {
+      const btn = document.getElementById('flash-btn');
+      btn.dataset.enabled = btn.dataset.enabled === '1' ? '0' : '1';
+      updateFlashBtn(btn.dataset.enabled === '1');
+      await pushSettings();
+    }
+
+    function updateFlashBtn(on) {
+      const btn = document.getElementById('flash-btn');
+      btn.dataset.enabled = on ? '1' : '0';
+      btn.textContent = on ? 'Flash ON — tap to disable' : 'Flash OFF — tap to enable';
+      btn.className = on ? 'btn-flash-on' : 'btn-flash-off';
+    }
+
     async function fetchState() {
       try {
         const r = await fetch('/state');
@@ -125,6 +186,20 @@
         } else {
           btn.textContent = 'LED is OFF — tap to turn ON';
           btn.className = 'btn-off';
+        }
+
+        // Flash settings (only update sliders if user is not dragging)
+        if (s.flash_enabled !== undefined) {
+          updateFlashBtn(s.flash_enabled);
+          // Only sync slider if not being interacted with
+          if (document.activeElement !== document.getElementById('period-sl')) {
+            document.getElementById('period-sl').value = s.period_ms;
+            document.getElementById('period-val').textContent = (s.period_ms / 1000).toFixed(1) + 's';
+          }
+          if (document.activeElement !== document.getElementById('duty-sl')) {
+            document.getElementById('duty-sl').value = s.duty_percent;
+            document.getElementById('duty-val').textContent = s.duty_percent + '%';
+          }
         }
 
         // Peers

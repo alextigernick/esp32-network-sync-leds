@@ -25,3 +25,6 @@
 
 // How often STA nodes request time sync (ms)
 #define TIME_SYNC_INTERVAL_MS  5000
+
+// HTTP timeout when forwarding settings to peers (ms)
+#define SETTINGS_HTTP_TIMEOUT_MS  1500
