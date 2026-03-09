@@ -11,10 +11,12 @@
 // row_first: 1 = snake across rows (L-R/R-L), 0 = snake down columns (T-B/B-T)
 
 typedef struct {
-    uint8_t rows;       // 1–32
-    uint8_t cols;       // 1–32
-    uint8_t origin;     // 0=TL, 1=TR, 2=BL, 3=BR
-    uint8_t row_first;  // 1=row-major meander, 0=col-major meander
+    uint8_t  rows;          // 1–32
+    uint8_t  cols;          // 1–32
+    uint8_t  origin;        // 0=TL, 1=TR, 2=BL, 3=BR
+    uint8_t  row_first;     // 1=row-major meander, 0=col-major meander
+    float x_spacing_mm;  // horizontal LED spacing in mm (> 0)
+    float y_spacing_mm;  // vertical   LED spacing in mm (> 0)
 } grid_config_t;
 
 // Load from NVS. Call once after nvs_flash_init().

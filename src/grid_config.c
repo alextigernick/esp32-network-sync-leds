@@ -8,10 +8,12 @@
 #define NS  "grid_cfg"
 
 static grid_config_t s_cfg = {
-    .rows      = 4,
-    .cols      = 8,
-    .origin    = 0,  // TL
-    .row_first = 1,
+    .rows          = 4,
+    .cols          = 8,
+    .origin        = 0,  // TL
+    .row_first     = 1,
+    .x_spacing_mm  = 50.0f,
+    .y_spacing_mm  = 50.0f,
 };
 
 void grid_config_load(void) {
@@ -45,6 +47,8 @@ void grid_config_save(const grid_config_t *cfg) {
     if (s_cfg.cols > 32) s_cfg.cols = 32;
     if (s_cfg.origin > 3) s_cfg.origin = 0;
     s_cfg.row_first = s_cfg.row_first ? 1 : 0;
+    if (s_cfg.x_spacing_mm <= 0.0f) s_cfg.x_spacing_mm = 1.0f;
+    if (s_cfg.y_spacing_mm <= 0.0f) s_cfg.y_spacing_mm = 1.0f;
 
     nvs_handle_t h;
     if (nvs_open(NS, NVS_READWRITE, &h) != ESP_OK) {
@@ -54,6 +58,7 @@ void grid_config_save(const grid_config_t *cfg) {
     nvs_set_blob(h, "cfg", &s_cfg, sizeof(s_cfg));
     nvs_commit(h);
     nvs_close(h);
-    ESP_LOGI(TAG, "saved: %ux%u origin=%u row_first=%u",
-             s_cfg.rows, s_cfg.cols, s_cfg.origin, s_cfg.row_first);
+    ESP_LOGI(TAG, "saved: %ux%u origin=%u row_first=%u spacing=%.2fx%.2fmm",
+             s_cfg.rows, s_cfg.cols, s_cfg.origin, s_cfg.row_first,
+             s_cfg.x_spacing_mm, s_cfg.y_spacing_mm);
 }

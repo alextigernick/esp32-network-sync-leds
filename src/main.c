@@ -2,6 +2,7 @@
 #include "discovery.h"
 #include "node_config.h"
 #include "grid_config.h"
+#include "pixel_layout.h"
 #include "time_sync.h"
 #include "settings_sync.h"
 #include "web_server.h"
@@ -18,6 +19,7 @@
 #include "esp_log.h"
 #include "esp_netif.h"
 #include "nvs_flash.h"
+#include "esp_spiffs.h"
 
 #define TAG "main"
 
@@ -143,8 +145,21 @@ void app_main(void) {
         ESP_ERROR_CHECK(nvs_flash_init());
     }
 
+    esp_vfs_spiffs_conf_t spiffs_conf = {
+        .base_path              = "/spiffs",
+        .partition_label        = NULL,
+        .max_files              = 4,
+        .format_if_mount_failed = true,
+    };
+    esp_err_t spiffs_ret = esp_vfs_spiffs_register(&spiffs_conf);
+    if (spiffs_ret != ESP_OK) {
+        ESP_LOGW(TAG, "SPIFFS mount failed (%s) — pixel layout unavailable",
+                 esp_err_to_name(spiffs_ret));
+    }
+
     node_config_load();
     grid_config_load();
+    pixel_layout_load();
 
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());

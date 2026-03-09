@@ -2,6 +2,7 @@
 #include "discovery.h"
 #include "node_config.h"
 #include "grid_config.h"
+#include "pixel_layout.h"
 #include "time_sync.h"
 #include "settings_sync.h"
 #include "config.h"
@@ -318,11 +319,13 @@ static esp_err_t handle_led_pixel_post(httpd_req_t *req) {
 static esp_err_t handle_grid_config_get(httpd_req_t *req) {
     grid_config_t g;
     grid_config_get(&g);
-    static char buf[64];
+    static char buf[96];
     int len = snprintf(buf, sizeof(buf),
-        "{\"rows\":%u,\"cols\":%u,\"origin\":%u,\"row_first\":%u}",
+        "{\"rows\":%u,\"cols\":%u,\"origin\":%u,\"row_first\":%u"
+        ",\"x_spacing_mm\":%.4g,\"y_spacing_mm\":%.4g}",
         (unsigned)g.rows, (unsigned)g.cols,
-        (unsigned)g.origin, (unsigned)g.row_first);
+        (unsigned)g.origin, (unsigned)g.row_first,
+        (double)g.x_spacing_mm, (double)g.y_spacing_mm);
     httpd_resp_set_type(req, "application/json");
     httpd_resp_send(req, buf, len);
     return ESP_OK;
@@ -331,7 +334,7 @@ static esp_err_t handle_grid_config_get(httpd_req_t *req) {
 // ---- /grid_config POST -------------------------------------------------
 
 static esp_err_t handle_grid_config_post(httpd_req_t *req) {
-    char body[64] = {0};
+    char body[96] = {0};
     int recv_len = req->content_len < (int)sizeof(body) - 1
                    ? req->content_len : (int)sizeof(body) - 1;
     if (recv_len > 0) httpd_req_recv(req, body, recv_len);
@@ -340,12 +343,64 @@ static esp_err_t handle_grid_config_post(httpd_req_t *req) {
     grid_config_get(&g);  // start from current values
 
     char *p;
-    if ((p = strstr(body, "rows=")))      g.rows      = (uint8_t)strtoul(p + 5, NULL, 10);
-    if ((p = strstr(body, "cols=")))      g.cols      = (uint8_t)strtoul(p + 5, NULL, 10);
-    if ((p = strstr(body, "origin=")))    g.origin    = (uint8_t)strtoul(p + 7, NULL, 10);
-    if ((p = strstr(body, "row_first="))) g.row_first = (uint8_t)strtoul(p + 10, NULL, 10);
+    if ((p = strstr(body, "rows=")))         g.rows         = (uint8_t) strtoul(p + 5,  NULL, 10);
+    if ((p = strstr(body, "cols=")))         g.cols         = (uint8_t) strtoul(p + 5,  NULL, 10);
+    if ((p = strstr(body, "origin=")))       g.origin       = (uint8_t) strtoul(p + 7,  NULL, 10);
+    if ((p = strstr(body, "row_first=")))    g.row_first    = (uint8_t) strtoul(p + 10, NULL, 10);
+    if ((p = strstr(body, "x_spacing_mm="))) g.x_spacing_mm = strtof(p + 13, NULL);
+    if ((p = strstr(body, "y_spacing_mm="))) g.y_spacing_mm = strtof(p + 13, NULL);
 
     grid_config_save(&g);
+
+    httpd_resp_set_status(req, "204 No Content");
+    httpd_resp_send(req, NULL, 0);
+    return ESP_OK;
+}
+
+// ---- /pixel_layout GET -------------------------------------------------
+
+static esp_err_t handle_pixel_layout_get(httpd_req_t *req) {
+    httpd_resp_set_type(req, "text/plain");
+    FILE *f = fopen("/spiffs/pixel_layout.csv", "r");
+    if (!f) {
+        httpd_resp_send_chunk(req, NULL, 0);
+        return ESP_OK;
+    }
+    static char buf[512];
+    size_t n;
+    while ((n = fread(buf, 1, sizeof(buf), f)) > 0) {
+        httpd_resp_send_chunk(req, buf, (ssize_t)n);
+    }
+    fclose(f);
+    httpd_resp_send_chunk(req, NULL, 0);
+    return ESP_OK;
+}
+
+// ---- /pixel_layout POST ------------------------------------------------
+
+static esp_err_t handle_pixel_layout_post(httpd_req_t *req) {
+    FILE *f = fopen("/spiffs/pixel_layout.csv", "w");
+    if (!f) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "SPIFFS open failed");
+        return ESP_FAIL;
+    }
+
+    static char buf[512];
+    int remaining = req->content_len;
+    while (remaining > 0) {
+        int to_read = remaining < (int)sizeof(buf) ? remaining : (int)sizeof(buf);
+        int received = httpd_req_recv(req, buf, to_read);
+        if (received <= 0) {
+            fclose(f);
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Receive error");
+            return ESP_FAIL;
+        }
+        fwrite(buf, 1, received, f);
+        remaining -= received;
+    }
+    fclose(f);
+
+    pixel_layout_load();
 
     httpd_resp_set_status(req, "204 No Content");
     httpd_resp_send(req, NULL, 0);
@@ -383,9 +438,11 @@ void web_server_start(void) {
         { .uri = "/settings",     .method = HTTP_POST, .handler = handle_settings_post    },
         { .uri = "/node_config",  .method = HTTP_GET,  .handler = handle_node_config_get  },
         { .uri = "/node_config",  .method = HTTP_POST, .handler = handle_node_config_post },
-        { .uri = "/grid_config",  .method = HTTP_GET,  .handler = handle_grid_config_get  },
-        { .uri = "/grid_config",  .method = HTTP_POST, .handler = handle_grid_config_post },
-        { .uri = "/led_pixel",    .method = HTTP_POST, .handler = handle_led_pixel_post   },
+        { .uri = "/grid_config",    .method = HTTP_GET,  .handler = handle_grid_config_get    },
+        { .uri = "/grid_config",    .method = HTTP_POST, .handler = handle_grid_config_post   },
+        { .uri = "/pixel_layout",   .method = HTTP_GET,  .handler = handle_pixel_layout_get   },
+        { .uri = "/pixel_layout",   .method = HTTP_POST, .handler = handle_pixel_layout_post  },
+        { .uri = "/led_pixel",      .method = HTTP_POST, .handler = handle_led_pixel_post     },
     };
     for (int i = 0; i < (int)(sizeof(routes)/sizeof(routes[0])); i++) {
         httpd_register_uri_handler(server, &routes[i]);

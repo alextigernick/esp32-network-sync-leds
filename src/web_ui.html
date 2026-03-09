@@ -88,21 +88,14 @@
     }
     .card.grid-card { width: auto; min-width: 280px; max-width: 90vw; }
     .grid-inp {
-      width: 3.5rem; padding: .3rem .4rem;
+      width: 4.5rem; padding: .3rem .4rem;
       background: #282828; color: #eee;
       border: 1px solid #444; border-radius: 6px;
       font-family: monospace; font-size: .9rem; text-align: center;
     }
-    #grid-table { border-collapse: collapse; margin-top: .8rem; font-size: .75rem; }
-    #grid-table td {
-      border: 1px solid #333; width: 2rem; height: 1.6rem;
-      text-align: center; color: #0f9;
-      font-variant-numeric: tabular-nums;
-      cursor: pointer;
-    }
-    #grid-table td:hover { background: #2a2a2a; }
-    #grid-table td.row-rev { color: #f90; }
-    #grid-table td.lit { background: #1a3a1a; outline: 1px solid #0f9; }
+    #layout-plot { display: block; margin-top: .8rem; background: #1a1a1a; border-radius: 6px; }
+    .upload-row { display: flex; gap: .5rem; align-items: center; margin-top: .6rem; flex-wrap: wrap; }
+    .upload-row input[type=file] { flex: 1; font-size: .8rem; color: #aaa; min-width: 0; }
   </style>
 </head>
 <body>
@@ -174,6 +167,14 @@
       <input type="number" class="grid-inp" id="grid-cols" min="1" max="32" value="8">
     </div>
     <div class="row" style="margin-top:.4rem">
+      <label>X spacing</label>
+      <input type="number" class="grid-inp" id="grid-x-spacing" min="0.01" step="any" value="50">
+      <span style="color:#888;font-size:.8rem;margin-left:.3rem">mm</span>
+      <label style="margin-left:.6rem">Y spacing</label>
+      <input type="number" class="grid-inp" id="grid-y-spacing" min="0.01" step="any" value="50">
+      <span style="color:#888;font-size:.8rem;margin-left:.3rem">mm</span>
+    </div>
+    <div class="row" style="margin-top:.4rem">
       <label>Origin</label>
       <select id="grid-origin" style="flex:1;padding:.3rem .4rem;background:#282828;color:#eee;border:1px solid #444;border-radius:6px;font-family:monospace;font-size:.85rem">
         <option value="0">Top-left</option>
@@ -189,11 +190,22 @@
         <option value="0">Col-first (T↕B)</option>
       </select>
     </div>
-    <div style="font-size:.75rem;color:#555;margin-top:.4rem">
-      Green = forward run &nbsp;·&nbsp; <span style="color:#f90">Orange</span> = reversed run
+    <div style="display:flex;gap:.5rem;margin-top:.8rem;flex-wrap:wrap">
+      <button class="btn-off" onclick="saveGridConfig()">Save grid config</button>
+      <button class="btn-off" onclick="generateAndUploadCsv()">Generate CSV</button>
     </div>
-    <div style="overflow-x:auto"><table id="grid-table"></table></div>
-    <button class="btn-off" style="margin-top:.8rem" onclick="saveGridConfig()">Save</button>
+  </div>
+
+  <!-- Pixel layout -->
+  <div class="card grid-card">
+    <h2>Pixel Layout</h2>
+    <div id="layout-info" style="font-size:.8rem;color:#888">No layout loaded.</div>
+    <svg id="layout-plot" width="300" height="200"></svg>
+    <div class="upload-row">
+      <input type="file" id="csv-file" accept=".csv,text/plain">
+      <button class="btn-off" onclick="uploadCsv()">Upload CSV</button>
+      <button class="btn-off" onclick="downloadCsv()">Download</button>
+    </div>
   </div>
 
   <!-- Peer navigator -->
@@ -452,93 +464,49 @@
 
     // ---- grid config -------------------------------------------------------
 
-    let _litPixel = null;
-
-    async function tapPixel(td, idx) {
-      if (_litPixel !== null) _litPixel.classList.remove('lit');
-      if (_litPixel === td) {
-        // second tap on same cell → turn off
-        _litPixel = null;
-        await fetch('/led_pixel', {
-          method: 'POST',
-          headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-          body: 'idx=-1',
-        });
-        return;
+    function gridLedIndex(r, c, rows, cols, flipRows, flipCols, rowFirst) {
+      const pr = flipRows ? (rows - 1 - r) : r;
+      const pc = flipCols ? (cols - 1 - c) : c;
+      if (rowFirst) {
+        const pos = (pr % 2 === 0) ? pc : (cols - 1 - pc);
+        return pr * cols + pos;
+      } else {
+        const pos = (pc % 2 === 0) ? pr : (rows - 1 - pr);
+        return pc * rows + pos;
       }
-      _litPixel = td;
-      td.classList.add('lit');
-      await fetch('/led_pixel', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-        body: `idx=${idx}`,
-      });
     }
 
-    function renderGrid() {
-      const rows      = Math.max(1, Math.min(32, +document.getElementById('grid-rows').value   || 4));
-      const cols      = Math.max(1, Math.min(32, +document.getElementById('grid-cols').value   || 8));
-      const origin    = +document.getElementById('grid-origin').value;
-      const rowFirst  = +document.getElementById('grid-dir').value;
-
-      // origin bits: bit1 = flip rows, bit0 = flip cols
+    function buildGridCsv() {
+      const rows     = Math.max(1, Math.min(32, +document.getElementById('grid-rows').value || 4));
+      const cols     = Math.max(1, Math.min(32, +document.getElementById('grid-cols').value || 8));
+      const xSp      = parseFloat(document.getElementById('grid-x-spacing').value) || 50;
+      const ySp      = parseFloat(document.getElementById('grid-y-spacing').value) || 50;
+      const origin   = +document.getElementById('grid-origin').value;
+      const rowFirst = +document.getElementById('grid-dir').value;
       const flipRows = (origin === 2 || origin === 3);
       const flipCols = (origin === 1 || origin === 3);
 
-      // ledIndex(r, c) → physical LED index for grid position (row r, col c)
-      function ledIndex(r, c) {
-        // apply origin flip to get run/position within a line
-        const pr = flipRows ? (rows - 1 - r) : r;
-        const pc = flipCols ? (cols - 1 - c) : c;
-        if (rowFirst) {
-          // run = pr, position within run = pc; even runs go forward, odd reversed
-          const pos = (pr % 2 === 0) ? pc : (cols - 1 - pc);
-          return pr * cols + pos;
-        } else {
-          // run = pc, position within run = pr; even runs go forward, odd reversed
-          const pos = (pc % 2 === 0) ? pr : (rows - 1 - pr);
-          return pc * rows + pos;
-        }
-      }
-
-      // isReversed(r, c) → true if this cell is on a reversed run
-      function isReversed(r, c) {
-        const pr = flipRows ? (rows - 1 - r) : r;
-        const pc = flipCols ? (cols - 1 - c) : c;
-        return rowFirst ? (pr % 2 !== 0) : (pc % 2 !== 0);
-      }
-
-      _litPixel = null;
-      const tbl = document.getElementById('grid-table');
-      tbl.innerHTML = '';
+      const lines = ['# index,x_mm,y_mm — generated from grid config'];
       for (let r = 0; r < rows; r++) {
-        const tr = document.createElement('tr');
         for (let c = 0; c < cols; c++) {
-          const td = document.createElement('td');
-          const idx = ledIndex(r, c);
-          td.textContent = idx;
-          if (isReversed(r, c)) td.className = 'row-rev';
-          td.onclick = () => tapPixel(td, idx);
-          tr.appendChild(td);
+          const idx = gridLedIndex(r, c, rows, cols, flipRows, flipCols, rowFirst);
+          lines.push(`${idx},${(c * xSp).toFixed(4)},${(r * ySp).toFixed(4)}`);
         }
-        tbl.appendChild(tr);
       }
+      return lines.join('\n') + '\n';
     }
-
-    // Re-render whenever any input changes
-    ['grid-rows','grid-cols','grid-origin','grid-dir'].forEach(id =>
-      document.getElementById(id).addEventListener('input', renderGrid));
 
     async function fetchGridConfig() {
       try {
         const r = await fetch('/grid_config');
         if (!r.ok) return;
         const g = await r.json();
-        document.getElementById('grid-rows').value   = g.rows;
-        document.getElementById('grid-cols').value   = g.cols;
-        document.getElementById('grid-origin').value = g.origin;
-        document.getElementById('grid-dir').value    = g.row_first;
-        renderGrid();
+        document.getElementById('grid-rows').value       = g.rows;
+        document.getElementById('grid-cols').value       = g.cols;
+        document.getElementById('grid-origin').value     = g.origin;
+        document.getElementById('grid-dir').value        = g.row_first;
+        document.getElementById('grid-x-spacing').value  = g.x_spacing_mm;
+        document.getElementById('grid-y-spacing').value  = g.y_spacing_mm;
       } catch (e) { console.warn('grid_config fetch failed', e); }
     }
 
@@ -547,17 +515,107 @@
       const cols     = document.getElementById('grid-cols').value;
       const origin   = document.getElementById('grid-origin').value;
       const rowFirst = document.getElementById('grid-dir').value;
+      const xSpacing = document.getElementById('grid-x-spacing').value;
+      const ySpacing = document.getElementById('grid-y-spacing').value;
       await fetch('/grid_config', {
         method: 'POST',
         headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-        body: `rows=${rows}&cols=${cols}&origin=${origin}&row_first=${rowFirst}`,
+        body: `rows=${rows}&cols=${cols}&origin=${origin}&row_first=${rowFirst}&x_spacing_mm=${xSpacing}&y_spacing_mm=${ySpacing}`,
       });
+    }
+
+    async function generateAndUploadCsv() {
+      const csv = buildGridCsv();
+      await fetch('/pixel_layout', {
+        method: 'POST',
+        headers: {'Content-Type': 'text/plain'},
+        body: csv,
+      });
+      await fetchAndRenderLayout();
+    }
+
+    // ---- pixel layout -------------------------------------------------------
+
+    let _layoutCsv = '';
+
+    function parseCsv(text) {
+      const pts = [];
+      for (const line of text.split('\n')) {
+        const t = line.trim();
+        if (!t || t.startsWith('#')) continue;
+        const parts = t.split(',');
+        if (parts.length < 3) continue;
+        const idx = parseInt(parts[0], 10);
+        const x   = parseFloat(parts[1]);
+        const y   = parseFloat(parts[2]);
+        if (!isNaN(idx) && !isNaN(x) && !isNaN(y)) pts.push({idx, x, y});
+      }
+      return pts;
+    }
+
+    function renderLayoutPlot(points) {
+      const svg = document.getElementById('layout-plot');
+      const W = svg.clientWidth || 300, H = svg.clientHeight || 200;
+      const PAD = 16;
+      if (!points.length) { svg.innerHTML = ''; return; }
+      const xs = points.map(p => p.x), ys = points.map(p => p.y);
+      const minX = Math.min(...xs), maxX = Math.max(...xs);
+      const minY = Math.min(...ys), maxY = Math.max(...ys);
+      const rangeX = maxX - minX || 1, rangeY = maxY - minY || 1;
+      const scale  = Math.min((W - 2*PAD) / rangeX, (H - 2*PAD) / rangeY);
+      const sx = x => PAD + (x - minX) * scale;
+      const sy = y => PAD + (y - minY) * scale;
+      let html = '';
+      for (const p of points) {
+        html += `<circle cx="${sx(p.x).toFixed(1)}" cy="${sy(p.y).toFixed(1)}" r="3" fill="#0f9" opacity="0.85"><title>${p.idx}: (${p.x}, ${p.y})</title></circle>`;
+      }
+      svg.innerHTML = html;
+    }
+
+    async function fetchAndRenderLayout() {
+      try {
+        const r = await fetch('/pixel_layout');
+        if (!r.ok) return;
+        _layoutCsv = await r.text();
+        const pts = parseCsv(_layoutCsv);
+        const info = document.getElementById('layout-info');
+        if (pts.length) {
+          const xs = pts.map(p => p.x), ys = pts.map(p => p.y);
+          info.textContent = `${pts.length} pixels  ·  `
+            + `x ${Math.min(...xs).toFixed(1)}–${Math.max(...xs).toFixed(1)} mm  ·  `
+            + `y ${Math.min(...ys).toFixed(1)}–${Math.max(...ys).toFixed(1)} mm`;
+        } else {
+          info.textContent = 'No layout loaded.';
+        }
+        renderLayoutPlot(pts);
+      } catch (e) { console.warn('pixel_layout fetch failed', e); }
+    }
+
+    async function uploadCsv() {
+      const file = document.getElementById('csv-file').files[0];
+      if (!file) return;
+      const text = await file.text();
+      await fetch('/pixel_layout', {
+        method: 'POST',
+        headers: {'Content-Type': 'text/plain'},
+        body: text,
+      });
+      await fetchAndRenderLayout();
+    }
+
+    function downloadCsv() {
+      const blob = new Blob([_layoutCsv], {type: 'text/plain'});
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'pixel_layout.csv';
+      a.click();
     }
 
     updateColor();
     fetchState();
     fetchNodeConfig();
     fetchGridConfig();
+    fetchAndRenderLayout();
     setInterval(fetchState, 3000);
   </script>
 </body>
