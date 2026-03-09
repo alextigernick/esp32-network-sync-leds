@@ -22,7 +22,7 @@ static rmt_encoder_handle_t s_encoder = NULL;
 // Sized for the compile-time maximum; s_num_leds tracks the live count.
 static uint8_t   s_pixels[MAX_LEDS * 3];
 static uint16_t  s_num_leds = NUM_LEDS;
-static uint8_t   s_r = 255, s_g = 255, s_b = 255;
+static uint8_t   s_r = 10, s_g = 0, s_b = 0;
 
 void led_init(void) {
     rmt_tx_channel_config_t chan_cfg = {

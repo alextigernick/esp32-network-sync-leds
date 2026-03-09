@@ -32,5 +32,9 @@ bool settings_decode(const char *body, settings_t *out);
 // buf must be at least 64 bytes.
 void settings_encode(const settings_t *s, char *buf, int buf_size);
 
+// Fetch settings from a peer via GET /settings and apply locally.
+// Returns true on success.  Call once on STA boot before starting tasks.
+bool settings_fetch_from_peer(const char *peer_ip);
+
 // Start the LED flash task.  Call once after GPIO is configured.
 void settings_start_flash_task(void);

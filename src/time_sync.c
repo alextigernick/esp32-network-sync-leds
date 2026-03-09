@@ -27,6 +27,12 @@ static uint32_t s_fail_count  = 0;
 static char     s_role[20]    = "master";
 static bool     s_first_sync  = true;
 
+static bool (*s_first_sync_cb)(const char *peer_ip) = NULL;
+
+void time_sync_set_first_sync_cb(bool (*cb)(const char *peer_ip)) {
+    s_first_sync_cb = cb;
+}
+
 void time_sync_get_debug(time_sync_debug_t *out) {
     out->offset_us   = s_offset_us;
     out->last_rtt_us = s_last_rtt_us;
@@ -160,10 +166,16 @@ static bool do_sync_burst(int sock, const char *master_ip) {
 
     if (good == 0) return false;
 
+    bool was_first = s_first_sync;
     apply_offset(best_offset, best_rtt);
     ESP_LOGI(TAG, "Synced to %s: offset=%lld us  best_rtt=%lld us  (%d/%d ok)",
              master_ip, (long long)s_offset_us, (long long)best_rtt,
              good, TIME_SYNC_SAMPLES);
+
+    if (was_first && s_first_sync_cb) {
+        s_first_sync_cb(master_ip);
+        s_first_sync_cb = NULL; // fire once only
+    }
     return true;
 }
 

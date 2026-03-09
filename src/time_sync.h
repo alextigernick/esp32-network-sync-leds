@@ -1,4 +1,5 @@
 #pragma once
+#include <stdbool.h>
 #include <stdint.h>
 
 // Start master role: serve time to requesting nodes
@@ -26,3 +27,8 @@ typedef struct {
 
 // Fill *out with current debug state
 void time_sync_get_debug(time_sync_debug_t *out);
+
+// Register a callback invoked once after the first successful time sync.
+// Called with the IP of the peer that was synced to.
+// Must be set before starting any sync task.
+void time_sync_set_first_sync_cb(bool (*cb)(const char *peer_ip));

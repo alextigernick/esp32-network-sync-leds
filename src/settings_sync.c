@@ -172,6 +172,53 @@ static void flash_task(void *arg) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Boot-time settings fetch — pull current config from a peer on first join
+// ---------------------------------------------------------------------------
+
+bool settings_fetch_from_peer(const char *peer_ip) {
+    static char url[48];
+    snprintf(url, sizeof(url), "http://%s/settings", peer_ip);
+
+    static char resp_buf[128];
+    int resp_len = 0;
+
+    esp_http_client_config_t cfg = {
+        .url        = url,
+        .method     = HTTP_METHOD_GET,
+        .timeout_ms = SETTINGS_HTTP_TIMEOUT_MS,
+    };
+    esp_http_client_handle_t client = esp_http_client_init(&cfg);
+
+    esp_err_t err = esp_http_client_open(client, 0);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "fetch from %s: open failed: %s", peer_ip, esp_err_to_name(err));
+        esp_http_client_cleanup(client);
+        return false;
+    }
+
+    esp_http_client_fetch_headers(client);
+    resp_len = esp_http_client_read(client, resp_buf, sizeof(resp_buf) - 1);
+    esp_http_client_close(client);
+    esp_http_client_cleanup(client);
+
+    if (resp_len <= 0) {
+        ESP_LOGW(TAG, "fetch from %s: empty response", peer_ip);
+        return false;
+    }
+    resp_buf[resp_len] = '\0';
+
+    settings_t fetched;
+    if (!settings_decode(resp_buf, &fetched)) {
+        ESP_LOGW(TAG, "fetch from %s: decode failed", peer_ip);
+        return false;
+    }
+
+    settings_apply_local(&fetched);
+    ESP_LOGI(TAG, "boot-fetched settings from %s", peer_ip);
+    return true;
+}
+
 void settings_start_flash_task(void) {
     s_mutex         = xSemaphoreCreateMutex();
     s_forward_queue = xQueueCreate(4, sizeof(settings_t));

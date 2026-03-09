@@ -2,6 +2,7 @@
 #include "discovery.h"
 #include "node_config.h"
 #include "time_sync.h"
+#include "settings_sync.h"
 #include "web_server.h"
 
 #include <string.h>
@@ -164,6 +165,7 @@ void app_main(void) {
     ESP_LOGI(TAG, "Node name: %s", s_my_name);
 
     if (is_sta) {
+        time_sync_set_first_sync_cb(settings_fetch_from_peer);
         time_sync_start_elected(s_my_ip);
     } else {
         time_sync_start_master();
