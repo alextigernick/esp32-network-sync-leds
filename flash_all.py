@@ -38,6 +38,17 @@ def get_peers(seed_ip: str) -> list[dict]:
         sys.exit(1)
 
 
+def verify_node(ip: str, name: str) -> None:
+    """POST /ota/verify to commit the currently running firmware before flashing a new one."""
+    label = f"{name} ({ip})"
+    try:
+        req = urllib.request.Request(f"http://{ip}/ota/verify", data=b"", method="POST")
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            print(f"[pre-verify ok]   {label} — {resp.read().decode(errors='replace').strip()}")
+    except Exception as e:
+        print(f"[pre-verify skip] {label} — {e}")
+
+
 def flash_node(ip: str, name: str, fw_data: bytes) -> bool:
     """Upload firmware.bin to a single node via multipart POST /ota."""
     boundary = "----ESP32OTABoundary"
@@ -108,6 +119,7 @@ def main():
     lock = threading.Lock()
 
     def worker(node):
+        verify_node(node["ip"], node["name"])
         ok = flash_node(node["ip"], node["name"], fw_data)
         with lock:
             results[node["ip"]] = ok

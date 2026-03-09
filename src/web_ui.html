@@ -132,11 +132,15 @@
     <div class="kv"><span>offset</span><span id="ts-offset">—</span></div>
     <div class="kv"><span>last RTT</span><span id="ts-rtt">—</span></div>
     <div class="kv"><span>syncs ok / fail</span><span id="ts-counts">—</span></div>
-    <canvas id="offset-plot" width="244" height="80"
-            style="margin-top:.8rem;border:1px solid #333;border-radius:4px;display:block"></canvas>
-    <div style="display:flex;justify-content:space-between;font-size:.7rem;color:#555;margin-top:.2rem">
-      <span id="plot-min">—</span><span>offset jitter</span><span id="plot-max">—</span>
+    <div style="display:flex;gap:.3rem;margin-top:.8rem;align-items:stretch">
+      <div style="display:flex;flex-direction:column;justify-content:space-between;font-size:.7rem;color:#555;text-align:right;min-width:2.5rem">
+        <span id="plot-max">—</span>
+        <span id="plot-min">—</span>
+      </div>
+      <canvas id="offset-plot" width="220" height="80"
+              style="border:1px solid #333;border-radius:4px;display:block"></canvas>
     </div>
+    <div style="font-size:.7rem;color:#555;text-align:center;margin-top:.2rem">offset jitter</div>
   </div>
 
   <script>
