@@ -34,6 +34,13 @@ typedef struct {
     uint32_t perlin_scale_mm10; // spatial scale in 0.1 mm units (1000 = 100.0 mm)
     int32_t  perlin_speed_c100; // temporal drift in 0.01 noise-units/s (100 = 1.00)
     uint8_t  perlin_octaves;    // fBm octave count, 1–8
+
+    // Palette — used by MODE_SINE and MODE_PERLIN.
+    // Pattern brightness (0–1) is interpolated across pal_n colour stops.
+    // pal_bright is an overall dimmer applied after lookup (0 = off, 255 = full).
+    uint32_t pal_colors[4]; // packed 0x00RRGGBB, stops 0..pal_n-1
+    uint8_t  pal_n;         // active stop count, 1–4
+    uint8_t  pal_bright;    // overall brightness 0–255
 } settings_t;
 
 // Return a snapshot of current settings.

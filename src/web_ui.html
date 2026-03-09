@@ -87,6 +87,14 @@
       border: 1px solid #333;
       transition: background .1s;
     }
+    .pal-stop { display:flex; align-items:center; gap:.5rem; margin:.3rem 0; }
+    .pal-stop input[type=color] {
+      width:36px; height:28px; border:none; padding:0; background:none;
+      cursor:pointer; border-radius:4px; flex-shrink:0;
+    }
+    .pal-stop label { color:#888; font-size:.8rem; min-width:3.5rem; }
+    .pal-stop .btn-rm { width:auto; padding:.15rem .5rem; font-size:.75rem; margin:0; }
+    #pal-gradient { width:100%; height:22px; border-radius:5px; margin:.6rem 0; border:1px solid #333; }
     .card.grid-card { width: auto; min-width: 280px; max-width: 90vw; }
     .grid-inp {
       width: 4.5rem; padding: .3rem .4rem;
@@ -219,26 +227,6 @@
                oninput="updateSliderLabel('sine-speed-sl','sine-speed-val',v=>(v/100).toFixed(2)+' Hz'); scheduleSettingsPush()">
         <span class="val" id="sine-speed-val">1.00 Hz</span>
       </div>
-      <div style="border-top:1px solid #2a2a2a;margin:.8rem 0 .4rem"></div>
-      <div class="row">
-        <label>R</label>
-        <input type="range" class="r-track" id="sr-sl" min="0" max="255" step="1" value="255"
-               oninput="updateSineColor(); scheduleSettingsPush()">
-        <span class="val" id="sr-val">255</span>
-      </div>
-      <div class="row">
-        <label>G</label>
-        <input type="range" class="g-track" id="sg-sl" min="0" max="255" step="1" value="255"
-               oninput="updateSineColor(); scheduleSettingsPush()">
-        <span class="val" id="sg-val">255</span>
-      </div>
-      <div class="row">
-        <label>B</label>
-        <input type="range" class="b-track" id="sb-sl" min="0" max="255" step="1" value="255"
-               oninput="updateSineColor(); scheduleSettingsPush()">
-        <span class="val" id="sb-val">255</span>
-      </div>
-      <div class="color-preview" id="sine-color-preview"></div>
     </div>
 
     <!-- Perlin noise (mode 2) -->
@@ -262,26 +250,35 @@
                oninput="updateSliderLabel('perlin-oct-sl','perlin-oct-val',v=>v); scheduleSettingsPush()">
         <span class="val" id="perlin-oct-val">3</span>
       </div>
-      <div style="border-top:1px solid #2a2a2a;margin:.8rem 0 .4rem"></div>
-      <div class="row">
-        <label>R</label>
-        <input type="range" class="r-track" id="pr-sl" min="0" max="255" step="1" value="255"
-               oninput="updatePerlinColor(); scheduleSettingsPush()">
-        <span class="val" id="pr-val">255</span>
+    </div>
+
+    <!-- Shared palette (modes 1 & 2) -->
+    <div class="card" id="panel-palette" style="display:none">
+      <h2>Color Palette</h2>
+      <div class="row" style="margin-bottom:.4rem">
+        <label>Preset</label>
+        <select id="pal-preset" style="flex:1;padding:.3rem .4rem;background:#282828;color:#eee;border:1px solid #444;border-radius:6px;font-family:monospace;font-size:.85rem" onchange="applyPreset(this.value)">
+          <option value="">— custom —</option>
+          <option value="white">White Glow</option>
+          <option value="fire">Fire</option>
+          <option value="ocean">Ocean</option>
+          <option value="forest">Forest</option>
+          <option value="sunset">Sunset</option>
+          <option value="ice">Ice</option>
+          <option value="neon">Neon</option>
+          <option value="heat">Heat Map</option>
+        </select>
       </div>
       <div class="row">
-        <label>G</label>
-        <input type="range" class="g-track" id="pg-sl" min="0" max="255" step="1" value="255"
-               oninput="updatePerlinColor(); scheduleSettingsPush()">
-        <span class="val" id="pg-val">255</span>
+        <label>Brightness</label>
+        <input type="range" id="pal-bright-sl" min="0" max="255" step="1" value="255"
+               oninput="document.getElementById('pal-bright-val').textContent=Math.round(this.value/2.55)+'%'; scheduleSettingsPush()">
+        <span class="val" id="pal-bright-val">100%</span>
       </div>
-      <div class="row">
-        <label>B</label>
-        <input type="range" class="b-track" id="pb-sl" min="0" max="255" step="1" value="255"
-               oninput="updatePerlinColor(); scheduleSettingsPush()">
-        <span class="val" id="pb-val">255</span>
-      </div>
-      <div class="color-preview" id="perlin-color-preview"></div>
+      <div id="pal-gradient"></div>
+      <div id="pal-stops"></div>
+      <button class="btn-off" id="pal-add-btn" onclick="addPalStop()"
+              style="margin-top:.5rem;padding:.35rem">+ Add Stop</button>
     </div>
 
     <!-- Peer navigator -->
@@ -427,9 +424,10 @@
 
     function onModeChange() {
       const mode = +document.getElementById('mode-sel').value;
-      document.getElementById('panel-flash').style.display  = mode === 0 ? '' : 'none';
-      document.getElementById('panel-sine').style.display   = mode === 1 ? '' : 'none';
-      document.getElementById('panel-perlin').style.display = mode === 2 ? '' : 'none';
+      document.getElementById('panel-flash').style.display   = mode === 0 ? '' : 'none';
+      document.getElementById('panel-sine').style.display    = mode === 1 ? '' : 'none';
+      document.getElementById('panel-perlin').style.display  = mode === 2 ? '' : 'none';
+      document.getElementById('panel-palette').style.display = mode >= 1 ? '' : 'none';
       scheduleSettingsPush();
     }
 
@@ -443,24 +441,91 @@
       document.getElementById('color-preview').style.background = `rgb(${r},${g},${b})`;
     }
 
-    function updatePerlinColor() {
-      const r = +document.getElementById('pr-sl').value;
-      const g = +document.getElementById('pg-sl').value;
-      const b = +document.getElementById('pb-sl').value;
-      document.getElementById('pr-val').textContent = r;
-      document.getElementById('pg-val').textContent = g;
-      document.getElementById('pb-val').textContent = b;
-      document.getElementById('perlin-color-preview').style.background = `rgb(${r},${g},${b})`;
+    // ---- palette editor ----------------------------------------------------
+
+    const PRESETS = {
+      white:  ['#000000', '#ffffff'],
+      fire:   ['#000000', '#8b0000', '#ff4500', '#ffff00'],
+      ocean:  ['#000000', '#00008b', '#00bfff'],
+      forest: ['#000000', '#006400', '#adff2f'],
+      sunset: ['#0d0021', '#7b2d8b', '#ff4500', '#ff8c00'],
+      ice:    ['#000000', '#00e5ff'],
+      neon:   ['#000000', '#ff00ff'],
+      heat:   ['#000000', '#0000ff', '#00ffff', '#ffffff'],
+    };
+
+    let palStops = ['#000000', '#ffffff'];
+
+    function hexToPacked(hex) {
+      const n = parseInt(hex.slice(1), 16);
+      return n & 0xFFFFFF;
     }
 
-    function updateSineColor() {
-      const r = +document.getElementById('sr-sl').value;
-      const g = +document.getElementById('sg-sl').value;
-      const b = +document.getElementById('sb-sl').value;
-      document.getElementById('sr-val').textContent = r;
-      document.getElementById('sg-val').textContent = g;
-      document.getElementById('sb-val').textContent = b;
-      document.getElementById('sine-color-preview').style.background = `rgb(${r},${g},${b})`;
+    function packedToHex(packed) {
+      return '#' + (packed & 0xFFFFFF).toString(16).padStart(6, '0');
+    }
+
+    function renderPalGradient() {
+      const el = document.getElementById('pal-gradient');
+      if (palStops.length === 1) {
+        el.style.background = palStops[0];
+      } else {
+        const pct = palStops.map((c, i) => `${c} ${Math.round(i / (palStops.length - 1) * 100)}%`);
+        el.style.background = `linear-gradient(to right, ${pct.join(', ')})`;
+      }
+    }
+
+    function renderPalStops() {
+      const container = document.getElementById('pal-stops');
+      container.innerHTML = '';
+      palStops.forEach((hex, i) => {
+        const row = document.createElement('div');
+        row.className = 'pal-stop';
+        row.innerHTML =
+          `<label>Stop ${i + 1}</label>` +
+          `<input type="color" value="${hex}"` +
+          ` oninput="palStops[${i}]=this.value; renderPalGradient();` +
+          ` document.getElementById('pal-preset').value=''; scheduleSettingsPush()">` +
+          (palStops.length > 1
+            ? `<button class="btn-off btn-rm" onclick="removePalStop(${i})">✕</button>`
+            : '');
+        container.appendChild(row);
+      });
+      document.getElementById('pal-add-btn').style.display = palStops.length >= 4 ? 'none' : '';
+      renderPalGradient();
+    }
+
+    function addPalStop() {
+      if (palStops.length >= 4) return;
+      palStops.push('#ffffff');
+      document.getElementById('pal-preset').value = '';
+      renderPalStops();
+      scheduleSettingsPush();
+    }
+
+    function removePalStop(i) {
+      if (palStops.length <= 1) return;
+      palStops.splice(i, 1);
+      document.getElementById('pal-preset').value = '';
+      renderPalStops();
+      scheduleSettingsPush();
+    }
+
+    function applyPreset(name) {
+      if (!name || !PRESETS[name]) return;
+      palStops = [...PRESETS[name]];
+      renderPalStops();
+      scheduleSettingsPush();
+    }
+
+    function palFromState(s) {
+      const n = s.pal_n || 1;
+      const raw = [s.pal0, s.pal1, s.pal2, s.pal3];
+      palStops = raw.slice(0, n).map(v => packedToHex(v || 0));
+      document.getElementById('pal-bright-sl').value = s.pal_bright ?? 255;
+      document.getElementById('pal-bright-val').textContent =
+        Math.round((s.pal_bright ?? 255) / 2.55) + '%';
+      renderPalStops();
     }
 
     async function pushSettings(forward = true) {
@@ -468,29 +533,29 @@
       const flash  = document.getElementById('flash-btn').dataset.enabled === '1' ? 1 : 0;
       const period = document.getElementById('period-sl').value;
       const duty   = document.getElementById('duty-sl').value;
-      // Use mode-specific color sliders
-      const r = mode === 1 ? document.getElementById('sr-sl').value
-              : mode === 2 ? document.getElementById('pr-sl').value
-              : document.getElementById('r-sl').value;
-      const g = mode === 1 ? document.getElementById('sg-sl').value
-              : mode === 2 ? document.getElementById('pg-sl').value
-              : document.getElementById('g-sl').value;
-      const b = mode === 1 ? document.getElementById('sb-sl').value
-              : mode === 2 ? document.getElementById('pb-sl').value
-              : document.getElementById('b-sl').value;
+      const r      = document.getElementById('r-sl').value;
+      const g      = document.getElementById('g-sl').value;
+      const b      = document.getElementById('b-sl').value;
       const speriod = document.getElementById('sine-period-sl').value;
       const sangle  = document.getElementById('sine-angle-sl').value;
       const sspeed  = document.getElementById('sine-speed-sl').value;
       const pscale  = document.getElementById('perlin-scale-sl').value;
       const pspeed  = document.getElementById('perlin-speed-sl').value;
       const poct    = document.getElementById('perlin-oct-sl').value;
+      // Palette (all 4 slots always sent; unused slots default to 0)
+      const pc  = palStops.length;
+      const pbr = document.getElementById('pal-bright-sl').value;
+      let palStr = `&pc=${pc}&pbr=${pbr}`;
+      for (let i = 0; i < 4; i++) {
+        palStr += `&p${i}=${i < palStops.length ? hexToPacked(palStops[i]) : 0}`;
+      }
       const url = forward ? '/settings' : '/settings?fwd=0';
       await fetch(url, {
         method: 'POST',
         headers: {'Content-Type': 'application/x-www-form-urlencoded'},
         body: `flash=${flash}&period=${period}&duty=${duty}&r=${r}&g=${g}&b=${b}`
             + `&mode=${mode}&speriod=${speriod}&sangle=${sangle}&sspeed=${sspeed}`
-            + `&pscale=${pscale}&pspeed=${pspeed}&poct=${poct}`,
+            + `&pscale=${pscale}&pspeed=${pspeed}&poct=${poct}${palStr}`,
       });
     }
 
@@ -557,9 +622,10 @@
           const modeSel = document.getElementById('mode-sel');
           if (document.activeElement !== modeSel) {
             modeSel.value = s.mode;
-            document.getElementById('panel-flash').style.display  = s.mode === 0 ? '' : 'none';
-            document.getElementById('panel-sine').style.display   = s.mode === 1 ? '' : 'none';
-            document.getElementById('panel-perlin').style.display = s.mode === 2 ? '' : 'none';
+            document.getElementById('panel-flash').style.display   = s.mode === 0 ? '' : 'none';
+            document.getElementById('panel-sine').style.display    = s.mode === 1 ? '' : 'none';
+            document.getElementById('panel-perlin').style.display  = s.mode === 2 ? '' : 'none';
+            document.getElementById('panel-palette').style.display = s.mode >= 1 ? '' : 'none';
           }
         }
 
@@ -585,9 +651,8 @@
 
         // Perlin noise settings
         if (s.perlin_scale_mm10 !== undefined) {
-          const perlinActive = ['perlin-scale-sl','perlin-speed-sl','perlin-oct-sl','pr-sl','pg-sl','pb-sl']
-                                 .includes(document.activeElement.id);
-          if (!perlinActive) {
+          const active = ['perlin-scale-sl','perlin-speed-sl','perlin-oct-sl'].includes(document.activeElement.id);
+          if (!active) {
             document.getElementById('perlin-scale-sl').value = s.perlin_scale_mm10;
             document.getElementById('perlin-scale-val').textContent = (s.perlin_scale_mm10 / 10).toFixed(1) + ' mm';
             document.getElementById('perlin-speed-sl').value = s.perlin_speed_c100;
@@ -596,31 +661,26 @@
               document.getElementById('perlin-oct-sl').value = s.perlin_octaves;
               document.getElementById('perlin-oct-val').textContent = s.perlin_octaves;
             }
-            if (s.mode === 2) {
-              document.getElementById('pr-sl').value = s.r;
-              document.getElementById('pg-sl').value = s.g;
-              document.getElementById('pb-sl').value = s.b;
-              updatePerlinColor();
-            }
           }
         }
 
         // Sine wave settings
         if (s.sine_period_mm10 !== undefined) {
-          const sineActive = ['sine-period-sl','sine-angle-sl','sine-speed-sl','sr-sl','sg-sl','sb-sl']
-                               .includes(document.activeElement.id);
-          if (!sineActive) {
+          const active = ['sine-period-sl','sine-angle-sl','sine-speed-sl'].includes(document.activeElement.id);
+          if (!active) {
             document.getElementById('sine-period-sl').value = s.sine_period_mm10;
             document.getElementById('sine-period-val').textContent = (s.sine_period_mm10 / 10).toFixed(1) + ' mm';
             document.getElementById('sine-angle-sl').value = s.sine_angle_deg10;
             document.getElementById('sine-angle-val').textContent = (s.sine_angle_deg10 / 10).toFixed(1) + '°';
             document.getElementById('sine-speed-sl').value = s.sine_speed_c100;
             document.getElementById('sine-speed-val').textContent = (s.sine_speed_c100 / 100).toFixed(2) + ' Hz';
-            document.getElementById('sr-sl').value = s.r;
-            document.getElementById('sg-sl').value = s.g;
-            document.getElementById('sb-sl').value = s.b;
-            updateSineColor();
           }
+        }
+
+        // Palette
+        if (s.pal_n !== undefined) {
+          const palActive = document.activeElement.closest('#panel-palette') !== null;
+          if (!palActive) palFromState(s);
         }
 
         // Peers
@@ -854,8 +914,7 @@
     // ---- init --------------------------------------------------------------
 
     updateColor();
-    updateSineColor();
-    updatePerlinColor();
+    renderPalStops();
     fetchState();
     fetchNodeConfig();
     fetchAndRenderLayout();

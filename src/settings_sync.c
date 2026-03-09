@@ -36,6 +36,9 @@ static settings_t      s_settings = {
     .perlin_scale_mm10 = 1000,  // 100.0 mm
     .perlin_speed_c100 = 100,   // 1.00 noise-units/s
     .perlin_octaves    = 3,
+    .pal_colors        = { 0x000000, 0xFFFFFF, 0x000000, 0x000000 },
+    .pal_n             = 2,     // black → white
+    .pal_bright        = 255,
 };
 static SemaphoreHandle_t s_mutex;
 static QueueHandle_t     s_forward_queue; // queue of settings_t to forward
@@ -49,7 +52,8 @@ void settings_encode(const settings_t *s, char *buf, int buf_size) {
     snprintf(buf, buf_size,
              "flash=%d&period=%lu&duty=%u&r=%u&g=%u&b=%u"
              "&mode=%u&speriod=%lu&sangle=%ld&sspeed=%ld"
-             "&pscale=%lu&pspeed=%ld&poct=%u",
+             "&pscale=%lu&pspeed=%ld&poct=%u"
+             "&p0=%lu&p1=%lu&p2=%lu&p3=%lu&pc=%u&pbr=%u",
              s->flash_enabled ? 1 : 0,
              (unsigned long)s->period_ms,
              (unsigned)s->duty_percent,
@@ -60,7 +64,10 @@ void settings_encode(const settings_t *s, char *buf, int buf_size) {
              (long)s->sine_speed_c100,
              (unsigned long)s->perlin_scale_mm10,
              (long)s->perlin_speed_c100,
-             (unsigned)s->perlin_octaves);
+             (unsigned)s->perlin_octaves,
+             (unsigned long)s->pal_colors[0], (unsigned long)s->pal_colors[1],
+             (unsigned long)s->pal_colors[2], (unsigned long)s->pal_colors[3],
+             (unsigned)s->pal_n, (unsigned)s->pal_bright);
 }
 
 bool settings_decode(const char *body, settings_t *out) {
@@ -126,6 +133,23 @@ bool settings_decode(const char *body, settings_t *out) {
         if (v >= 1 && v <= 8) out->perlin_octaves = v;
     }
 
+    // Palette
+    // Use fixed offsets — keys p0..p3 are distinct enough from pscale/pspeed/poct
+    for (int i = 0; i < 4; i++) {
+        char key[4] = { 'p', (char)('0' + i), '=', '\0' };
+        p = strstr(body, key);
+        if (p) out->pal_colors[i] = (uint32_t)strtoul(p + 3, NULL, 10) & 0xFFFFFF;
+    }
+
+    p = strstr(body, "pc=");
+    if (p) {
+        uint8_t v = (uint8_t)strtoul(p + 3, NULL, 10);
+        if (v >= 1 && v <= 4) out->pal_n = v;
+    }
+
+    p = strstr(body, "pbr=");
+    if (p) out->pal_bright = (uint8_t)strtoul(p + 4, NULL, 10);
+
     return true;
 }
 
@@ -153,7 +177,7 @@ void settings_apply_local(const settings_t *s) {
 
 static void forward_task(void *arg) {
     settings_t pending;
-    static char body[192];
+    static char body[320];
     static char url[48];
 
     for (;;) {
@@ -204,64 +228,79 @@ void settings_apply_and_forward(const settings_t *s) {
 // Flash task — drives GPIO based on synced time
 // ---------------------------------------------------------------------------
 
-// Pixel RGB buffer for sine mode (MAX_LEDS * 3 bytes).
-static uint8_t s_sine_buf[MAX_LEDS * 3];
+// Pixel RGB buffer for pattern modes.
+static uint8_t s_pattern_buf[MAX_LEDS * 3];
+
+// Interpolate a colour from the palette for a given brightness t ∈ [0, 1].
+// Applies pal_bright as an overall dimmer.
+static void palette_lookup(float t, const uint32_t *colors, int n,
+                            float bright_scale,
+                            uint8_t *r, uint8_t *g, uint8_t *b) {
+    if (n <= 0) { *r = *g = *b = 0; return; }
+    if (t < 0.0f) t = 0.0f;
+    if (t > 1.0f) t = 1.0f;
+    float pos = t * (float)(n - 1);
+    int idx = (int)pos;
+    if (idx >= n - 1) idx = n - 2;
+    float frac = pos - (float)idx;
+    uint32_t c0 = colors[idx], c1 = (n > 1) ? colors[idx + 1] : colors[idx];
+    float r0 = (float)((c0 >> 16) & 0xFF), r1 = (float)((c1 >> 16) & 0xFF);
+    float g0 = (float)((c0 >>  8) & 0xFF), g1 = (float)((c1 >>  8) & 0xFF);
+    float b0 = (float)( c0        & 0xFF), b1 = (float)( c1        & 0xFF);
+    *r = (uint8_t)((r0 + (r1 - r0) * frac) * bright_scale);
+    *g = (uint8_t)((g0 + (g1 - g0) * frac) * bright_scale);
+    *b = (uint8_t)((b0 + (b1 - b0) * frac) * bright_scale);
+}
 
 static void flash_task(void *arg) {
     for (;;) {
         settings_t cur;
         settings_get(&cur);
 
-        if (cur.mode == MODE_PERLIN) {
-            float scale_mm = cur.perlin_scale_mm10 / 10.0f;
-            float speed    = cur.perlin_speed_c100  / 100.0f;
-            float time_s   = (float)(time_sync_get_ms()) * 0.001f;
-            int n_leds     = pixel_layout_count();
+        if (cur.mode == MODE_PERLIN || cur.mode == MODE_SINE) {
+            float time_s      = (float)(time_sync_get_ms()) * 0.001f;
+            float bright_scale = cur.pal_bright / 255.0f;
+            int   n_leds       = pixel_layout_count();
             if (n_leds > MAX_LEDS) n_leds = MAX_LEDS;
+
+            // Pre-compute sine wave constants outside the pixel loop
+            float cos_a = 0.0f, sin_a = 0.0f, time_phase = 0.0f, period_mm = 1.0f;
+            float scale_mm = 1.0f, speed = 0.0f;
+            int   octaves  = 1;
+            if (cur.mode == MODE_SINE) {
+                period_mm  = cur.sine_period_mm10 / 10.0f;
+                float angle_rad = cur.sine_angle_deg10 / 10.0f * (float)(M_PI / 180.0);
+                cos_a      = cosf(angle_rad);
+                sin_a      = sinf(angle_rad);
+                time_phase = time_s * (cur.sine_speed_c100 / 100.0f) * 2.0f * (float)M_PI;
+            } else {
+                scale_mm = cur.perlin_scale_mm10 / 10.0f;
+                speed    = cur.perlin_speed_c100  / 100.0f;
+                octaves  = (int)cur.perlin_octaves;
+            }
 
             for (int i = 0; i < n_leds; i++) {
                 float x, y;
                 if (!pixel_layout_get(i, &x, &y)) {
-                    s_sine_buf[i * 3 + 0] = 0;
-                    s_sine_buf[i * 3 + 1] = 0;
-                    s_sine_buf[i * 3 + 2] = 0;
+                    s_pattern_buf[i * 3 + 0] = 0;
+                    s_pattern_buf[i * 3 + 1] = 0;
+                    s_pattern_buf[i * 3 + 2] = 0;
                     continue;
                 }
-                float bright = perlin_sample(x, y, time_s, scale_mm, speed, (int)cur.perlin_octaves) / 255.0f;
-                s_sine_buf[i * 3 + 0] = (uint8_t)(bright * cur.r);
-                s_sine_buf[i * 3 + 1] = (uint8_t)(bright * cur.g);
-                s_sine_buf[i * 3 + 2] = (uint8_t)(bright * cur.b);
-            }
-            led_write_rgb(s_sine_buf, n_leds);
-        } else if (cur.mode == MODE_SINE) {
-            // Compute wave parameters from fixed-point settings
-            float period_mm  = cur.sine_period_mm10 / 10.0f;
-            float angle_rad  = cur.sine_angle_deg10 / 10.0f * (float)(M_PI / 180.0);
-            float speed_hz   = cur.sine_speed_c100  / 100.0f;
-            float cos_a      = cosf(angle_rad);
-            float sin_a      = sinf(angle_rad);
-            float time_s     = (float)(time_sync_get_ms()) * 0.001f;
-            float time_phase = time_s * speed_hz * 2.0f * (float)M_PI;
-            int n_leds       = pixel_layout_count();
-            if (n_leds > MAX_LEDS) n_leds = MAX_LEDS;
-
-            for (int i = 0; i < n_leds; i++) {
-                float x, y;
-                if (!pixel_layout_get(i, &x, &y)) {
-                    s_sine_buf[i * 3 + 0] = 0;
-                    s_sine_buf[i * 3 + 1] = 0;
-                    s_sine_buf[i * 3 + 2] = 0;
-                    continue;
+                float t;
+                if (cur.mode == MODE_SINE) {
+                    float proj = x * cos_a + y * sin_a;
+                    float wave = sinf((proj / period_mm) * 2.0f * (float)M_PI - time_phase);
+                    t = (wave + 1.0f) * 0.5f;
+                } else {
+                    t = perlin_sample(x, y, time_s, scale_mm, speed, octaves) / 255.0f;
                 }
-                // Project pixel position onto wave direction
-                float proj    = x * cos_a + y * sin_a;
-                float wave    = sinf((proj / period_mm) * 2.0f * (float)M_PI - time_phase);
-                float bright  = (wave + 1.0f) * 0.5f; // 0..1
-                s_sine_buf[i * 3 + 0] = (uint8_t)(bright * cur.r);
-                s_sine_buf[i * 3 + 1] = (uint8_t)(bright * cur.g);
-                s_sine_buf[i * 3 + 2] = (uint8_t)(bright * cur.b);
+                palette_lookup(t, cur.pal_colors, (int)cur.pal_n, bright_scale,
+                               &s_pattern_buf[i*3+0],
+                               &s_pattern_buf[i*3+1],
+                               &s_pattern_buf[i*3+2]);
             }
-            led_write_rgb(s_sine_buf, n_leds);
+            led_write_rgb(s_pattern_buf, n_leds);
         } else {
             if (cur.flash_enabled) {
                 uint64_t ms = time_sync_get_ms();
@@ -287,7 +326,7 @@ bool settings_fetch_from_peer(const char *peer_ip) {
     static char url[48];
     snprintf(url, sizeof(url), "http://%s/settings", peer_ip);
 
-    static char resp_buf[256];
+    static char resp_buf[320];
     int resp_len = 0;
 
     esp_http_client_config_t cfg = {
