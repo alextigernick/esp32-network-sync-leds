@@ -93,6 +93,7 @@
 #include <stdio.h>
 
 #include "led.h"
+#include "esp_http_client.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "esp_ota_ops.h"
@@ -465,6 +466,51 @@ static esp_err_t handle_pixel_layout_post(httpd_req_t *req) {
     return ESP_OK;
 }
 
+// ---- preset peer forwarding --------------------------------------------
+
+/* POST body to /presets/<sub>?fwd=0 on every discovered peer. */
+static void preset_forward(const char *sub, const char *body) {
+    peer_t peers[MAX_PEERS];
+    int n = discovery_get_peers(peers, MAX_PEERS);
+    static char url[80];
+    for (int i = 0; i < n; i++) {
+        snprintf(url, sizeof(url), "http://%s/presets/%s?fwd=0", peers[i].ip, sub);
+        esp_http_client_config_t cfg = {
+            .url             = url,
+            .method          = HTTP_METHOD_POST,
+            .timeout_ms      = SETTINGS_HTTP_TIMEOUT_MS,
+        };
+        esp_http_client_handle_t client = esp_http_client_init(&cfg);
+        esp_http_client_set_header(client, "Content-Type",
+                                   "application/x-www-form-urlencoded");
+        esp_http_client_set_post_field(client, body, (int)strlen(body));
+        esp_err_t err = esp_http_client_perform(client);
+        if (err != ESP_OK)
+            ESP_LOGW(TAG, "preset fwd %s to %s failed: %s",
+                     sub, peers[i].ip, esp_err_to_name(err));
+        esp_http_client_cleanup(client);
+    }
+}
+
+/* Decode URL-encoded name= field from body into out (null-terminated). */
+static void decode_name_field(const char *body, char *out, int out_size) {
+    out[0] = '\0';
+    const char *p = strstr(body, "name=");
+    if (!p || !p[5]) return;
+    const char *src = p + 5;
+    int ni = 0;
+    while (*src && ni < out_size - 1) {
+        if (*src == '+') { out[ni++] = ' '; src++; }
+        else if (*src == '%' && src[1] && src[2]) {
+            char hex[3] = { src[1], src[2], 0 };
+            out[ni++] = (char)strtol(hex, NULL, 16);
+            src += 3;
+        } else if (*src == '&') { break; }
+        else { out[ni++] = *src++; }
+    }
+    out[ni] = '\0';
+}
+
 // ---- /presets GET ------------------------------------------------------
 
 static esp_err_t handle_presets_get(httpd_req_t *req) {
@@ -476,37 +522,56 @@ static esp_err_t handle_presets_get(httpd_req_t *req) {
 }
 
 // ---- /presets/save POST ------------------------------------------------
+// Saves current settings under name on this node, then forwards to peers.
+// Peers receive the encoded settings in the body so they store the same data
+// regardless of which node they are (body: name=<n>&settings=<enc>).
 
 static esp_err_t handle_presets_save(httpd_req_t *req) {
-    char body[80] = {0};
+    char body[640] = {0};
     int recv_len = req->content_len < (int)sizeof(body) - 1
                    ? req->content_len : (int)sizeof(body) - 1;
     if (recv_len > 0) httpd_req_recv(req, body, recv_len);
 
-    char *p = strstr(body, "name=");
-    if (!p || !p[5]) {
+    char name[PRESET_NAME_MAX] = {0};
+    decode_name_field(body, name, sizeof(name));
+    if (!name[0]) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing name");
         return ESP_FAIL;
     }
-    char name[PRESET_NAME_MAX] = {0};
-    /* URL-decode the name (replace + with space, %XX with char) */
-    const char *src = p + 5;
-    int ni = 0;
-    while (*src && ni < (int)sizeof(name) - 1) {
-        if (*src == '+') { name[ni++] = ' '; src++; }
-        else if (*src == '%' && src[1] && src[2]) {
-            char hex[3] = { src[1], src[2], 0 };
-            name[ni++] = (char)strtol(hex, NULL, 16);
-            src += 3;
-        } else { name[ni++] = *src++; }
+
+    char query[32] = {0};
+    bool do_forward = true;
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK)
+        if (strstr(query, "fwd=0")) do_forward = false;
+
+    /* Check if peer provided pre-encoded settings (fwd=0 path) */
+    char *sp = strstr(body, "&settings=");
+    settings_t cfg;
+    if (sp) {
+        /* Peer-forwarded: decode the embedded settings string */
+        settings_get(&cfg);
+        settings_decode(sp + 10, &cfg);
+    } else {
+        /* Original request: use current local settings */
+        settings_get(&cfg);
     }
 
-    settings_t cfg;
-    settings_get(&cfg);
     if (!presets_save(name, &cfg)) {
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Save failed (full?)");
         return ESP_FAIL;
     }
+
+    if (do_forward) {
+        /* Build forward body: name=<n>&settings=<enc> */
+        static char fwd_body[640];
+        static char enc[512];
+        settings_encode(&cfg, enc, sizeof(enc));
+        snprintf(fwd_body, sizeof(fwd_body), "name=%s&settings=%s",
+                 strstr(body, "name=") + 5,   /* already URL-encoded name */
+                 enc);
+        preset_forward("save", fwd_body);
+    }
+
     httpd_resp_set_status(req, "204 No Content");
     httpd_resp_send(req, NULL, 0);
     return ESP_OK;
@@ -520,21 +585,11 @@ static esp_err_t handle_presets_load(httpd_req_t *req) {
                    ? req->content_len : (int)sizeof(body) - 1;
     if (recv_len > 0) httpd_req_recv(req, body, recv_len);
 
-    char *p = strstr(body, "name=");
-    if (!p || !p[5]) {
+    char name[PRESET_NAME_MAX] = {0};
+    decode_name_field(body, name, sizeof(name));
+    if (!name[0]) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing name");
         return ESP_FAIL;
-    }
-    char name[PRESET_NAME_MAX] = {0};
-    const char *src = p + 5;
-    int ni = 0;
-    while (*src && ni < (int)sizeof(name) - 1) {
-        if (*src == '+') { name[ni++] = ' '; src++; }
-        else if (*src == '%' && src[1] && src[2]) {
-            char hex[3] = { src[1], src[2], 0 };
-            name[ni++] = (char)strtol(hex, NULL, 16);
-            src += 3;
-        } else { name[ni++] = *src++; }
     }
 
     settings_t cfg;
@@ -542,6 +597,7 @@ static esp_err_t handle_presets_load(httpd_req_t *req) {
         httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Preset not found");
         return ESP_FAIL;
     }
+    /* settings_apply_and_forward already pushes to all peers */
     settings_apply_and_forward(&cfg);
     httpd_resp_set_status(req, "204 No Content");
     httpd_resp_send(req, NULL, 0);
@@ -556,24 +612,21 @@ static esp_err_t handle_presets_delete(httpd_req_t *req) {
                    ? req->content_len : (int)sizeof(body) - 1;
     if (recv_len > 0) httpd_req_recv(req, body, recv_len);
 
-    char *p = strstr(body, "name=");
-    if (!p || !p[5]) {
+    char name[PRESET_NAME_MAX] = {0};
+    decode_name_field(body, name, sizeof(name));
+    if (!name[0]) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing name");
         return ESP_FAIL;
     }
-    char name[PRESET_NAME_MAX] = {0};
-    const char *src = p + 5;
-    int ni = 0;
-    while (*src && ni < (int)sizeof(name) - 1) {
-        if (*src == '+') { name[ni++] = ' '; src++; }
-        else if (*src == '%' && src[1] && src[2]) {
-            char hex[3] = { src[1], src[2], 0 };
-            name[ni++] = (char)strtol(hex, NULL, 16);
-            src += 3;
-        } else { name[ni++] = *src++; }
-    }
+
+    char query[32] = {0};
+    bool do_forward = true;
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK)
+        if (strstr(query, "fwd=0")) do_forward = false;
 
     presets_delete(name);
+    if (do_forward) preset_forward("delete", strstr(body, "name="));
+
     httpd_resp_set_status(req, "204 No Content");
     httpd_resp_send(req, NULL, 0);
     return ESP_OK;
@@ -587,21 +640,20 @@ static esp_err_t handle_presets_set_default(httpd_req_t *req) {
                    ? req->content_len : (int)sizeof(body) - 1;
     if (recv_len > 0) httpd_req_recv(req, body, recv_len);
 
-    char *p = strstr(body, "name=");
     char name[PRESET_NAME_MAX] = {0};
-    if (p && p[5]) {
-        const char *src = p + 5;
-        int ni = 0;
-        while (*src && ni < (int)sizeof(name) - 1) {
-            if (*src == '+') { name[ni++] = ' '; src++; }
-            else if (*src == '%' && src[1] && src[2]) {
-                char hex[3] = { src[1], src[2], 0 };
-                name[ni++] = (char)strtol(hex, NULL, 16);
-                src += 3;
-            } else { name[ni++] = *src++; }
-        }
+    decode_name_field(body, name, sizeof(name));  /* empty = clear default */
+
+    char query[32] = {0};
+    bool do_forward = true;
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK)
+        if (strstr(query, "fwd=0")) do_forward = false;
+
+    presets_set_default(name);
+    if (do_forward) {
+        const char *fwd_body = strstr(body, "name=");
+        preset_forward("default", fwd_body ? fwd_body : "name=");
     }
-    presets_set_default(name);  /* empty string clears default */
+
     httpd_resp_set_status(req, "204 No Content");
     httpd_resp_send(req, NULL, 0);
     return ESP_OK;
