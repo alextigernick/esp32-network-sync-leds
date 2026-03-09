@@ -8,6 +8,7 @@ typedef struct {
     char ip[16];
     char name[PEER_NAME_LEN];
     uint32_t last_seen_ms;  // xTaskGetTickCount() * portTICK_PERIOD_MS
+    uint32_t uptime_ms;     // peer's esp_timer_get_time() / 1000 at announce time
 } peer_t;
 
 // Start the discovery task (announce self + listen for peers)

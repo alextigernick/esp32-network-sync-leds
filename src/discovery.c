@@ -10,11 +10,12 @@
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 
 #define TAG "discovery"
 
-// Announce packet format: "NAME:<name>\nIP:<ip>\n"
-#define ANNOUNCE_FMT "NAME:%s\nIP:%s\n"
+// Announce packet format: "NAME:<name>\nIP:<ip>\nUPTIME:<ms>\n"
+#define ANNOUNCE_FMT "NAME:%s\nIP:%s\nUPTIME:%lu\n"
 
 static peer_t s_peers[MAX_PEERS];
 static int    s_peer_count = 0;
@@ -25,13 +26,14 @@ static char s_my_name[PEER_NAME_LEN];
 
 // ---- peer table helpers ------------------------------------------------
 
-static void peer_update(const char *ip, const char *name) {
+static void peer_update(const char *ip, const char *name, uint32_t uptime_ms) {
     uint32_t now = xTaskGetTickCount() * portTICK_PERIOD_MS;
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     for (int i = 0; i < s_peer_count; i++) {
         if (strcmp(s_peers[i].ip, ip) == 0) {
             strncpy(s_peers[i].name, name, PEER_NAME_LEN - 1);
             s_peers[i].last_seen_ms = now;
+            s_peers[i].uptime_ms    = uptime_ms;
             xSemaphoreGive(s_mutex);
             return;
         }
@@ -40,6 +42,7 @@ static void peer_update(const char *ip, const char *name) {
         strncpy(s_peers[s_peer_count].ip,   ip,   15);
         strncpy(s_peers[s_peer_count].name, name, PEER_NAME_LEN - 1);
         s_peers[s_peer_count].last_seen_ms = now;
+        s_peers[s_peer_count].uptime_ms    = uptime_ms;
         s_peer_count++;
         ESP_LOGI(TAG, "New peer: %s (%s)", name, ip);
     }
@@ -79,7 +82,8 @@ static void announce_task(void *arg) {
 
     char buf[128];
     while (1) {
-        int len = snprintf(buf, sizeof(buf), ANNOUNCE_FMT, s_my_name, s_my_ip);
+        uint32_t uptime_ms = (uint32_t)(esp_timer_get_time() / 1000);
+        int len = snprintf(buf, sizeof(buf), ANNOUNCE_FMT, s_my_name, s_my_ip, uptime_ms);
         sendto(sock, buf, len, 0, (struct sockaddr *)&dest, sizeof(dest));
         peer_expire();
         vTaskDelay(pdMS_TO_TICKS(DISCOVERY_INTERVAL_MS));
@@ -127,9 +131,10 @@ static void listen_task(void *arg) {
         }
         buf[n] = '\0';
 
-        // Parse NAME and IP fields
+        // Parse NAME, IP, and UPTIME fields
         char name[PEER_NAME_LEN] = {0};
         char ip[16] = {0};
+        uint32_t uptime_ms = 0;
         char *p;
         if ((p = strstr(buf, "NAME:")) != NULL) {
             sscanf(p + 5, "%31[^\n]", name);
@@ -137,12 +142,15 @@ static void listen_task(void *arg) {
         if ((p = strstr(buf, "IP:")) != NULL) {
             sscanf(p + 3, "%15[^\n]", ip);
         }
+        if ((p = strstr(buf, "UPTIME:")) != NULL) {
+            sscanf(p + 7, "%lu", &uptime_ms);
+        }
 
         // Ignore our own announcements
         if (strcmp(ip, s_my_ip) == 0) continue;
 
         if (ip[0] && name[0]) {
-            peer_update(ip, name);
+            peer_update(ip, name, uptime_ms);
         }
     }
 }

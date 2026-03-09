@@ -98,6 +98,7 @@
 #include "esp_log.h"
 #include "esp_ota_ops.h"
 #include "esp_system.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -137,9 +138,10 @@ static esp_err_t handle_state(httpd_req_t *req) {
     settings_t cfg;
     settings_get(&cfg);
 
+    uint32_t uptime_ms = (uint32_t)(esp_timer_get_time() / 1000);
     A("{\"led\":%s,\"sync_ms\":%llu,\"ota_pending\":%s"
       ",\"ts_role\":\"%s\",\"ts_offset_us\":%lld,\"ts_rtt_us\":%lld"
-      ",\"ts_sync_count\":%lu,\"ts_fail_count\":%lu"
+      ",\"ts_sync_count\":%lu,\"ts_fail_count\":%lu,\"uptime_ms\":%lu"
       ",\"flash_enabled\":%s,\"period_ms\":%lu,\"duty_percent\":%u"
       ",\"r\":%u,\"g\":%u,\"b\":%u"
       ",\"mode\":%u,\"sine_period_mm10\":%lu,\"sine_angle_deg10\":%ld,\"sine_speed_c100\":%ld"
@@ -157,6 +159,7 @@ static esp_err_t handle_state(httpd_req_t *req) {
       (long long)dbg.last_rtt_us,
       (unsigned long)dbg.sync_count,
       (unsigned long)dbg.fail_count,
+      (unsigned long)uptime_ms,
       cfg.flash_enabled ? "true" : "false",
       (unsigned long)cfg.period_ms,
       (unsigned)cfg.duty_percent,

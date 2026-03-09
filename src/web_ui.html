@@ -400,6 +400,7 @@
     <div class="card">
       <h2>Time Sync</h2>
       <div class="kv"><span>role</span><span id="ts-role">—</span></div>
+      <div class="kv"><span>uptime</span><span id="ts-uptime">—</span></div>
       <div class="kv"><span>synced time</span><span id="ts-ms">—</span></div>
       <div class="kv"><span>offset</span><span id="ts-offset">—</span></div>
       <div class="kv"><span>last RTT</span><span id="ts-rtt">—</span></div>
@@ -897,6 +898,7 @@
 
         // Time sync
         document.getElementById('ts-role').textContent = s.ts_role;
+        { const u = s.uptime_ms; const sec = Math.floor(u/1000); const h = Math.floor(sec/3600), m = Math.floor((sec%3600)/60), ss = sec%60; document.getElementById('ts-uptime').textContent = h ? `${h}h ${m}m ${ss}s` : m ? `${m}m ${ss}s` : `${ss}s`; }
         document.getElementById('ts-ms').textContent = s.sync_ms + ' ms';
         const offsetUs = s.ts_offset_us;
         document.getElementById('ts-offset').textContent =

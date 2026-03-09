@@ -230,19 +230,29 @@ static void elected_slave_task(void *arg) {
         peer_t peers[MAX_PEERS];
         int count = discovery_get_peers(peers, MAX_PEERS);
 
-        uint32_t best_u32 = my_u32;
+        // Elect the node with the highest uptime (longest-running = stable root).
+        // Use IP as a tiebreaker (lower IP wins) to keep the result deterministic.
+        uint32_t my_uptime = (uint32_t)(esp_timer_get_time() / 1000);
+        uint32_t best_uptime = my_uptime;
+        uint32_t best_u32    = my_u32;
         char best_ip[16];
         strncpy(best_ip, s_my_ip, sizeof(best_ip));
 
+        uint32_t now_ms = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
         for (int i = 0; i < count; i++) {
-            uint32_t p = ip_to_u32(peers[i].ip);
-            if (p < best_u32) {
-                best_u32 = p;
+            // Estimate peer's current uptime: announced value + time since we heard it
+            uint32_t age_ms   = now_ms - peers[i].last_seen_ms;
+            uint32_t p_uptime = peers[i].uptime_ms + age_ms;
+            uint32_t p_u32    = ip_to_u32(peers[i].ip);
+            if (p_uptime > best_uptime ||
+                (p_uptime == best_uptime && p_u32 < best_u32)) {
+                best_uptime = p_uptime;
+                best_u32    = p_u32;
                 strncpy(best_ip, peers[i].ip, sizeof(best_ip));
             }
         }
 
-        if (my_u32 <= best_u32) {
+        if (strcmp(best_ip, s_my_ip) == 0) {
             strncpy(s_role, "root", sizeof(s_role) - 1);
             vTaskDelay(pdMS_TO_TICKS(TIME_SYNC_INTERVAL_MS));
             continue;
