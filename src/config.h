@@ -7,8 +7,9 @@
 // AP address (fixed)
 #define AP_IP           "192.168.4.1"
 
-// External LED GPIO
+// WS2812B strip: data pin and length
 #define LED_GPIO        20
+#define NUM_LEDS        8
 
 // UDP multicast group and port for peer discovery
 #define DISCOVERY_MCAST_ADDR  "239.0.0.1"

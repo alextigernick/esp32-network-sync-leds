@@ -77,6 +77,15 @@
     .row .val { color: #cfc; font-size: .85rem; min-width: 4rem; text-align: right; font-variant-numeric: tabular-nums; }
     .btn-flash-on  { background: #0f9; color: #000; }
     .btn-flash-off { background: #333; color: #aaa; }
+    .row input[type=range].r-track { accent-color: #f55; }
+    .row input[type=range].g-track { accent-color: #5f5; }
+    .row input[type=range].b-track { accent-color: #55f; }
+    .color-preview {
+      width: 100%; height: 28px; border-radius: 6px;
+      margin: .6rem 0 .2rem;
+      border: 1px solid #333;
+      transition: background .1s;
+    }
   </style>
 </head>
 <body>
@@ -104,6 +113,26 @@
              oninput="updateSliderLabel('duty-sl','duty-val',v=>v+'%'); scheduleSettingsPush()">
       <span class="val" id="duty-val">50%</span>
     </div>
+    <div style="border-top:1px solid #2a2a2a;margin:.8rem 0 .4rem"></div>
+    <div class="row">
+      <label>R</label>
+      <input type="range" class="r-track" id="r-sl" min="0" max="255" step="1" value="255"
+             oninput="updateColor(); scheduleSettingsPush()">
+      <span class="val" id="r-val">255</span>
+    </div>
+    <div class="row">
+      <label>G</label>
+      <input type="range" class="g-track" id="g-sl" min="0" max="255" step="1" value="255"
+             oninput="updateColor(); scheduleSettingsPush()">
+      <span class="val" id="g-val">255</span>
+    </div>
+    <div class="row">
+      <label>B</label>
+      <input type="range" class="b-track" id="b-sl" min="0" max="255" step="1" value="255"
+             oninput="updateColor(); scheduleSettingsPush()">
+      <span class="val" id="b-val">255</span>
+    </div>
+    <div class="color-preview" id="color-preview"></div>
   </div>
 
   <!-- Peer navigator -->
@@ -155,15 +184,29 @@
       document.getElementById(labelId).textContent = fmt(v);
     }
 
+    function updateColor() {
+      const r = +document.getElementById('r-sl').value;
+      const g = +document.getElementById('g-sl').value;
+      const b = +document.getElementById('b-sl').value;
+      document.getElementById('r-val').textContent = r;
+      document.getElementById('g-val').textContent = g;
+      document.getElementById('b-val').textContent = b;
+      document.getElementById('color-preview').style.background =
+        `rgb(${r},${g},${b})`;
+    }
+
     async function pushSettings(forward = true) {
-      const flash   = document.getElementById('flash-btn').dataset.enabled === '1' ? 1 : 0;
-      const period  = document.getElementById('period-sl').value;
-      const duty    = document.getElementById('duty-sl').value;
-      const url     = forward ? '/settings' : '/settings?fwd=0';
+      const flash  = document.getElementById('flash-btn').dataset.enabled === '1' ? 1 : 0;
+      const period = document.getElementById('period-sl').value;
+      const duty   = document.getElementById('duty-sl').value;
+      const r      = document.getElementById('r-sl').value;
+      const g      = document.getElementById('g-sl').value;
+      const b      = document.getElementById('b-sl').value;
+      const url    = forward ? '/settings' : '/settings?fwd=0';
       await fetch(url, {
         method: 'POST',
         headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-        body: `flash=${flash}&period=${period}&duty=${duty}`,
+        body: `flash=${flash}&period=${period}&duty=${duty}&r=${r}&g=${g}&b=${b}`,
       });
     }
 
@@ -254,6 +297,13 @@
             document.getElementById('duty-sl').value = s.duty_percent;
             document.getElementById('duty-val').textContent = s.duty_percent + '%';
           }
+          const colorActive = ['r-sl','g-sl','b-sl'].includes(document.activeElement.id);
+          if (!colorActive && s.r !== undefined) {
+            document.getElementById('r-sl').value = s.r;
+            document.getElementById('g-sl').value = s.g;
+            document.getElementById('b-sl').value = s.b;
+            updateColor();
+          }
         }
 
         // Peers
@@ -321,6 +371,7 @@
       await fetchState();
     }
 
+    updateColor();
     fetchState();
     setInterval(fetchState, 3000);
   </script>

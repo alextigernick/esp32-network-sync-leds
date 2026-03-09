@@ -7,7 +7,7 @@
 #include <string.h>
 #include <stdio.h>
 
-#include "driver/gpio.h"
+#include "led.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "esp_ota_ops.h"
@@ -22,9 +22,9 @@ extern const uint8_t web_ui_html_end[]   asm("_binary_web_ui_html_end");
 
 static bool s_led_on = false;
 
-static void led_set(bool on) {
+static void web_led_set(bool on) {
     s_led_on = on;
-    gpio_set_level(LED_GPIO, on ? 1 : 0);
+    led_set(on);
 }
 
 // ---- /state JSON endpoint ----------------------------------------------
@@ -55,6 +55,7 @@ static esp_err_t handle_state(httpd_req_t *req) {
       ",\"ts_role\":\"%s\",\"ts_offset_us\":%lld,\"ts_rtt_us\":%lld"
       ",\"ts_sync_count\":%lu,\"ts_fail_count\":%lu"
       ",\"flash_enabled\":%s,\"period_ms\":%lu,\"duty_percent\":%u"
+      ",\"r\":%u,\"g\":%u,\"b\":%u"
       ",\"peers\":[",
       s_led_on ? "true" : "false",
       (unsigned long long)sync_ms,
@@ -66,7 +67,8 @@ static esp_err_t handle_state(httpd_req_t *req) {
       (unsigned long)dbg.fail_count,
       cfg.flash_enabled ? "true" : "false",
       (unsigned long)cfg.period_ms,
-      (unsigned)cfg.duty_percent);
+      (unsigned)cfg.duty_percent,
+      (unsigned)cfg.r, (unsigned)cfg.g, (unsigned)cfg.b);
 
     for (int i = 0; i < peer_count; i++) {
         A("%s{\"name\":\"%s\",\"ip\":\"%s\"}",
@@ -98,8 +100,8 @@ static esp_err_t handle_led_post(httpd_req_t *req) {
                    ? req->content_len : (int)sizeof(body) - 1;
     if (recv_len > 0) httpd_req_recv(req, body, recv_len);
 
-    if      (strstr(body, "state=on"))  led_set(true);
-    else if (strstr(body, "state=off")) led_set(false);
+    if      (strstr(body, "state=on"))  web_led_set(true);
+    else if (strstr(body, "state=off")) web_led_set(false);
 
     httpd_resp_set_status(req, "204 No Content");
     httpd_resp_send(req, NULL, 0);
@@ -263,15 +265,6 @@ static esp_err_t handle_settings_post(httpd_req_t *req) {
 // ---- start -------------------------------------------------------------
 
 void web_server_start(void) {
-    ESP_LOGI(TAG, "Configuring LED GPIO %d", LED_GPIO);
-    gpio_config_t io = {
-        .pin_bit_mask = 1ULL << LED_GPIO,
-        .mode         = GPIO_MODE_OUTPUT,
-    };
-    gpio_config(&io);
-    ESP_LOGI(TAG, "gpio_config ok");
-    led_set(false);
-    ESP_LOGI(TAG, "led_set ok");
     settings_start_flash_task();
 
     httpd_config_t config    = HTTPD_DEFAULT_CONFIG();

@@ -7,7 +7,7 @@
 #include <string.h>
 #include <stdio.h>
 
-#include "driver/gpio.h"
+#include "led.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -25,6 +25,7 @@ static settings_t      s_settings = {
     .flash_enabled = false,
     .period_ms     = 1000,
     .duty_percent  = 50,
+    .r = 255, .g = 255, .b = 255,
 };
 static SemaphoreHandle_t s_mutex;
 static QueueHandle_t     s_forward_queue; // queue of settings_t to forward
@@ -36,10 +37,11 @@ static QueueHandle_t     s_forward_queue; // queue of settings_t to forward
 
 void settings_encode(const settings_t *s, char *buf, int buf_size) {
     snprintf(buf, buf_size,
-             "flash=%d&period=%lu&duty=%u",
+             "flash=%d&period=%lu&duty=%u&r=%u&g=%u&b=%u",
              s->flash_enabled ? 1 : 0,
              (unsigned long)s->period_ms,
-             (unsigned)s->duty_percent);
+             (unsigned)s->duty_percent,
+             s->r, s->g, s->b);
 }
 
 bool settings_decode(const char *body, settings_t *out) {
@@ -64,6 +66,13 @@ bool settings_decode(const char *body, settings_t *out) {
         uint32_t v = (uint32_t)strtoul(p + 5, NULL, 10);
         if (v >= 1 && v <= 100) out->duty_percent = (uint8_t)v;
     }
+
+    p = strstr(body, "r=");
+    if (p) out->r = (uint8_t)strtoul(p + 2, NULL, 10);
+    p = strstr(body, "g=");
+    if (p) out->g = (uint8_t)strtoul(p + 2, NULL, 10);
+    p = strstr(body, "b=");
+    if (p) out->b = (uint8_t)strtoul(p + 2, NULL, 10);
 
     return true;
 }
@@ -152,9 +161,11 @@ static void flash_task(void *arg) {
             uint64_t ms = time_sync_get_ms();
             uint32_t phase = (uint32_t)(ms % cur.period_ms);
             uint32_t on_time = (uint32_t)((uint64_t)cur.period_ms * cur.duty_percent / 100);
-            gpio_set_level(LED_GPIO, phase < on_time ? 1 : 0);
+            bool on = (phase < on_time);
+            led_set_rgb(cur.r, cur.g, cur.b);
+            led_set(on);
         } else {
-            gpio_set_level(LED_GPIO, 0);
+            led_set(false);
         }
 
         vTaskDelay(pdMS_TO_TICKS(10)); // 10 ms resolution
@@ -165,6 +176,8 @@ void settings_start_flash_task(void) {
     s_mutex         = xSemaphoreCreateMutex();
     s_forward_queue = xQueueCreate(4, sizeof(settings_t));
 
-    xTaskCreate(flash_task,   "flash",   2048, NULL, 3, NULL);
+    led_init();
+
+    xTaskCreate(flash_task,   "flash",   4096, NULL, 3, NULL);
     xTaskCreate(forward_task, "fwd_set", 4096, NULL, 3, NULL);
 }

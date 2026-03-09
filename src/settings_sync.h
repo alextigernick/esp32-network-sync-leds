@@ -13,6 +13,7 @@ typedef struct {
     bool     flash_enabled;
     uint32_t period_ms;    // 100 – 10 000
     uint8_t  duty_percent; // 1 – 100
+    uint8_t  r, g, b;     // LED on-color (default white)
 } settings_t;
 
 // Return a snapshot of current settings.
