@@ -3,6 +3,7 @@
 #include "node_config.h"
 #include "pixel_layout.h"
 #include "time_sync.h"
+#include "presets.h"
 #include "settings_sync.h"
 #include "web_server.h"
 
@@ -192,6 +193,9 @@ void app_main(void) {
 
     ESP_LOGI(TAG, "Starting web server...");
     web_server_start();
+
+    // Apply boot-default preset after settings mutex/task are initialized
+    presets_apply_default();
 
     ESP_LOGI(TAG, "System ready. http://%s/", s_my_ip);
 }

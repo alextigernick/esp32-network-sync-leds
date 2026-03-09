@@ -84,6 +84,7 @@
 #include "discovery.h"
 #include "node_config.h"
 #include "pixel_layout.h"
+#include "presets.h"
 #include "time_sync.h"
 #include "settings_sync.h"
 #include "config.h"
@@ -464,6 +465,148 @@ static esp_err_t handle_pixel_layout_post(httpd_req_t *req) {
     return ESP_OK;
 }
 
+// ---- /presets GET ------------------------------------------------------
+
+static esp_err_t handle_presets_get(httpd_req_t *req) {
+    static char buf[1024];
+    int len = presets_to_json(buf, sizeof(buf));
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, buf, len);
+    return ESP_OK;
+}
+
+// ---- /presets/save POST ------------------------------------------------
+
+static esp_err_t handle_presets_save(httpd_req_t *req) {
+    char body[80] = {0};
+    int recv_len = req->content_len < (int)sizeof(body) - 1
+                   ? req->content_len : (int)sizeof(body) - 1;
+    if (recv_len > 0) httpd_req_recv(req, body, recv_len);
+
+    char *p = strstr(body, "name=");
+    if (!p || !p[5]) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing name");
+        return ESP_FAIL;
+    }
+    char name[PRESET_NAME_MAX] = {0};
+    /* URL-decode the name (replace + with space, %XX with char) */
+    const char *src = p + 5;
+    int ni = 0;
+    while (*src && ni < (int)sizeof(name) - 1) {
+        if (*src == '+') { name[ni++] = ' '; src++; }
+        else if (*src == '%' && src[1] && src[2]) {
+            char hex[3] = { src[1], src[2], 0 };
+            name[ni++] = (char)strtol(hex, NULL, 16);
+            src += 3;
+        } else { name[ni++] = *src++; }
+    }
+
+    settings_t cfg;
+    settings_get(&cfg);
+    if (!presets_save(name, &cfg)) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Save failed (full?)");
+        return ESP_FAIL;
+    }
+    httpd_resp_set_status(req, "204 No Content");
+    httpd_resp_send(req, NULL, 0);
+    return ESP_OK;
+}
+
+// ---- /presets/load POST ------------------------------------------------
+
+static esp_err_t handle_presets_load(httpd_req_t *req) {
+    char body[80] = {0};
+    int recv_len = req->content_len < (int)sizeof(body) - 1
+                   ? req->content_len : (int)sizeof(body) - 1;
+    if (recv_len > 0) httpd_req_recv(req, body, recv_len);
+
+    char *p = strstr(body, "name=");
+    if (!p || !p[5]) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing name");
+        return ESP_FAIL;
+    }
+    char name[PRESET_NAME_MAX] = {0};
+    const char *src = p + 5;
+    int ni = 0;
+    while (*src && ni < (int)sizeof(name) - 1) {
+        if (*src == '+') { name[ni++] = ' '; src++; }
+        else if (*src == '%' && src[1] && src[2]) {
+            char hex[3] = { src[1], src[2], 0 };
+            name[ni++] = (char)strtol(hex, NULL, 16);
+            src += 3;
+        } else { name[ni++] = *src++; }
+    }
+
+    settings_t cfg;
+    if (!presets_load(name, &cfg)) {
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "Preset not found");
+        return ESP_FAIL;
+    }
+    settings_apply_and_forward(&cfg);
+    httpd_resp_set_status(req, "204 No Content");
+    httpd_resp_send(req, NULL, 0);
+    return ESP_OK;
+}
+
+// ---- /presets/delete POST ----------------------------------------------
+
+static esp_err_t handle_presets_delete(httpd_req_t *req) {
+    char body[80] = {0};
+    int recv_len = req->content_len < (int)sizeof(body) - 1
+                   ? req->content_len : (int)sizeof(body) - 1;
+    if (recv_len > 0) httpd_req_recv(req, body, recv_len);
+
+    char *p = strstr(body, "name=");
+    if (!p || !p[5]) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing name");
+        return ESP_FAIL;
+    }
+    char name[PRESET_NAME_MAX] = {0};
+    const char *src = p + 5;
+    int ni = 0;
+    while (*src && ni < (int)sizeof(name) - 1) {
+        if (*src == '+') { name[ni++] = ' '; src++; }
+        else if (*src == '%' && src[1] && src[2]) {
+            char hex[3] = { src[1], src[2], 0 };
+            name[ni++] = (char)strtol(hex, NULL, 16);
+            src += 3;
+        } else { name[ni++] = *src++; }
+    }
+
+    presets_delete(name);
+    httpd_resp_set_status(req, "204 No Content");
+    httpd_resp_send(req, NULL, 0);
+    return ESP_OK;
+}
+
+// ---- /presets/default POST ---------------------------------------------
+
+static esp_err_t handle_presets_set_default(httpd_req_t *req) {
+    char body[80] = {0};
+    int recv_len = req->content_len < (int)sizeof(body) - 1
+                   ? req->content_len : (int)sizeof(body) - 1;
+    if (recv_len > 0) httpd_req_recv(req, body, recv_len);
+
+    char *p = strstr(body, "name=");
+    char name[PRESET_NAME_MAX] = {0};
+    if (p && p[5]) {
+        const char *src = p + 5;
+        int ni = 0;
+        while (*src && ni < (int)sizeof(name) - 1) {
+            if (*src == '+') { name[ni++] = ' '; src++; }
+            else if (*src == '%' && src[1] && src[2]) {
+                char hex[3] = { src[1], src[2], 0 };
+                name[ni++] = (char)strtol(hex, NULL, 16);
+                src += 3;
+            } else { name[ni++] = *src++; }
+        }
+    }
+    presets_set_default(name);  /* empty string clears default */
+    httpd_resp_set_status(req, "204 No Content");
+    httpd_resp_send(req, NULL, 0);
+    return ESP_OK;
+}
+
 // ---- start -------------------------------------------------------------
 
 void web_server_start(void) {
@@ -473,7 +616,7 @@ void web_server_start(void) {
     config.stack_size        = 8192;
     config.recv_wait_timeout = 30;
     config.send_wait_timeout = 10;
-    config.max_uri_handlers  = 13;
+    config.max_uri_handlers  = 18;
     config.max_open_sockets  = 5;    // leave room for discovery/time_sync/forward_task sockets
     config.lru_purge_enable  = true; // recycle oldest idle socket when at max_open_sockets
 
@@ -497,7 +640,12 @@ void web_server_start(void) {
         { .uri = "/node_config",  .method = HTTP_POST, .handler = handle_node_config_post },
         { .uri = "/pixel_layout",   .method = HTTP_GET,  .handler = handle_pixel_layout_get   },
         { .uri = "/pixel_layout",   .method = HTTP_POST, .handler = handle_pixel_layout_post  },
-        { .uri = "/led_pixel",      .method = HTTP_POST, .handler = handle_led_pixel_post     },
+        { .uri = "/led_pixel",        .method = HTTP_POST, .handler = handle_led_pixel_post        },
+        { .uri = "/presets",          .method = HTTP_GET,  .handler = handle_presets_get           },
+        { .uri = "/presets/save",     .method = HTTP_POST, .handler = handle_presets_save          },
+        { .uri = "/presets/load",     .method = HTTP_POST, .handler = handle_presets_load          },
+        { .uri = "/presets/delete",   .method = HTTP_POST, .handler = handle_presets_delete        },
+        { .uri = "/presets/default",  .method = HTTP_POST, .handler = handle_presets_set_default   },
     };
     for (int i = 0; i < (int)(sizeof(routes)/sizeof(routes[0])); i++) {
         httpd_register_uri_handler(server, &routes[i]);

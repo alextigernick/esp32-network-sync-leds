@@ -309,6 +309,17 @@
       </select>
     </div>
 
+    <!-- Presets -->
+    <div class="card" id="presets-card">
+      <h2>Presets</h2>
+      <div class="row" style="gap:.5rem;flex-wrap:wrap">
+        <input id="preset-name-input" type="text" placeholder="Preset name"
+               style="flex:1;min-width:120px;background:#1a1a1a;color:#eee;border:1px solid #333;border-radius:4px;padding:.35rem .6rem;font-size:.85rem">
+        <button onclick="presetSave()" style="white-space:nowrap">Save current</button>
+      </div>
+      <div id="preset-list" style="margin-top:.8rem;display:flex;flex-direction:column;gap:.4rem"></div>
+    </div>
+
   </div><!-- /tab-mesh -->
 
   <!-- ===== TAB: Device Config ===== -->
@@ -1101,6 +1112,91 @@
       if (pts.length) renderLayoutPlot(pts);
     });
 
+    // ---- presets -----------------------------------------------------------
+
+    async function fetchPresets() {
+      try {
+        const r = await fetch('/presets');
+        const data = await r.json();
+        renderPresets(data);
+      } catch(e) { /* ignore */ }
+    }
+
+    function renderPresets(data) {
+      const list = document.getElementById('preset-list');
+      list.innerHTML = '';
+      if (!data.presets || data.presets.length === 0) {
+        list.innerHTML = '<span style="color:#666;font-size:.8rem">No saved presets</span>';
+        return;
+      }
+      for (const p of data.presets) {
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex;align-items:center;gap:.4rem;flex-wrap:wrap';
+        const isDefault = p.is_default;
+        const nameEl = document.createElement('span');
+        nameEl.textContent = p.name;
+        nameEl.style.cssText = 'flex:1;font-size:.85rem;min-width:80px;' + (isDefault ? 'color:#0f9;font-weight:bold' : '');
+        if (isDefault) nameEl.title = 'Boot default';
+
+        const loadBtn = document.createElement('button');
+        loadBtn.textContent = 'Load';
+        loadBtn.style.cssText = 'padding:.2rem .55rem;font-size:.78rem';
+        loadBtn.onclick = () => presetLoad(p.name);
+
+        const defBtn = document.createElement('button');
+        defBtn.textContent = isDefault ? '★ Default' : '☆ Default';
+        defBtn.style.cssText = 'padding:.2rem .55rem;font-size:.78rem' + (isDefault ? ';color:#0f9' : '');
+        defBtn.onclick = () => presetSetDefault(isDefault ? '' : p.name);
+
+        const delBtn = document.createElement('button');
+        delBtn.textContent = '✕';
+        delBtn.style.cssText = 'padding:.2rem .45rem;font-size:.78rem;color:#f66';
+        delBtn.onclick = () => { if (confirm('Delete preset "' + p.name + '"?')) presetDelete(p.name); };
+
+        row.append(nameEl, loadBtn, defBtn, delBtn);
+        list.appendChild(row);
+      }
+    }
+
+    async function presetSave() {
+      const name = document.getElementById('preset-name-input').value.trim();
+      if (!name) { alert('Enter a preset name'); return; }
+      await fetch('/presets/save', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+        body: 'name=' + encodeURIComponent(name)
+      });
+      document.getElementById('preset-name-input').value = '';
+      fetchPresets();
+    }
+
+    async function presetLoad(name) {
+      await fetch('/presets/load', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+        body: 'name=' + encodeURIComponent(name)
+      });
+      fetchState();
+    }
+
+    async function presetDelete(name) {
+      await fetch('/presets/delete', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+        body: 'name=' + encodeURIComponent(name)
+      });
+      fetchPresets();
+    }
+
+    async function presetSetDefault(name) {
+      await fetch('/presets/default', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+        body: 'name=' + encodeURIComponent(name)
+      });
+      fetchPresets();
+    }
+
     // ---- init --------------------------------------------------------------
 
     updateColor();
@@ -1108,6 +1204,7 @@
     fetchState();
     fetchNodeConfig();
     fetchAndRenderLayout();
+    fetchPresets();
     setInterval(fetchState, 3000);
   </script>
 </body>
