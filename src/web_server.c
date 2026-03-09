@@ -141,7 +141,7 @@ static esp_err_t handle_state(httpd_req_t *req) {
       ",\"flash_enabled\":%s,\"period_ms\":%lu,\"duty_percent\":%u"
       ",\"r\":%u,\"g\":%u,\"b\":%u"
       ",\"mode\":%u,\"sine_period_mm10\":%lu,\"sine_angle_deg10\":%ld,\"sine_speed_c100\":%ld"
-      ",\"perlin_scale_mm10\":%lu,\"perlin_speed_c100\":%ld"
+      ",\"perlin_scale_mm10\":%lu,\"perlin_speed_c100\":%ld,\"perlin_octaves\":%u"
       ",\"peers\":[",
       s_led_on ? "true" : "false",
       (unsigned long long)sync_ms,
@@ -160,7 +160,8 @@ static esp_err_t handle_state(httpd_req_t *req) {
       (long)cfg.sine_angle_deg10,
       (long)cfg.sine_speed_c100,
       (unsigned long)cfg.perlin_scale_mm10,
-      (long)cfg.perlin_speed_c100);
+      (long)cfg.perlin_speed_c100,
+      (unsigned)cfg.perlin_octaves);
 
     for (int i = 0; i < peer_count; i++) {
         A("%s{\"name\":\"%s\",\"ip\":\"%s\"}",

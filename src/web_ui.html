@@ -256,6 +256,12 @@
                oninput="updateSliderLabel('perlin-speed-sl','perlin-speed-val',v=>(v/100).toFixed(2)+' u/s'); scheduleSettingsPush()">
         <span class="val" id="perlin-speed-val">1.00 u/s</span>
       </div>
+      <div class="row">
+        <label>Octaves</label>
+        <input type="range" id="perlin-oct-sl" min="1" max="8" step="1" value="3"
+               oninput="updateSliderLabel('perlin-oct-sl','perlin-oct-val',v=>v); scheduleSettingsPush()">
+        <span class="val" id="perlin-oct-val">3</span>
+      </div>
       <div style="border-top:1px solid #2a2a2a;margin:.8rem 0 .4rem"></div>
       <div class="row">
         <label>R</label>
@@ -477,13 +483,14 @@
       const sspeed  = document.getElementById('sine-speed-sl').value;
       const pscale  = document.getElementById('perlin-scale-sl').value;
       const pspeed  = document.getElementById('perlin-speed-sl').value;
+      const poct    = document.getElementById('perlin-oct-sl').value;
       const url = forward ? '/settings' : '/settings?fwd=0';
       await fetch(url, {
         method: 'POST',
         headers: {'Content-Type': 'application/x-www-form-urlencoded'},
         body: `flash=${flash}&period=${period}&duty=${duty}&r=${r}&g=${g}&b=${b}`
             + `&mode=${mode}&speriod=${speriod}&sangle=${sangle}&sspeed=${sspeed}`
-            + `&pscale=${pscale}&pspeed=${pspeed}`,
+            + `&pscale=${pscale}&pspeed=${pspeed}&poct=${poct}`,
       });
     }
 
@@ -578,13 +585,17 @@
 
         // Perlin noise settings
         if (s.perlin_scale_mm10 !== undefined) {
-          const perlinActive = ['perlin-scale-sl','perlin-speed-sl','pr-sl','pg-sl','pb-sl']
+          const perlinActive = ['perlin-scale-sl','perlin-speed-sl','perlin-oct-sl','pr-sl','pg-sl','pb-sl']
                                  .includes(document.activeElement.id);
           if (!perlinActive) {
             document.getElementById('perlin-scale-sl').value = s.perlin_scale_mm10;
             document.getElementById('perlin-scale-val').textContent = (s.perlin_scale_mm10 / 10).toFixed(1) + ' mm';
             document.getElementById('perlin-speed-sl').value = s.perlin_speed_c100;
             document.getElementById('perlin-speed-val').textContent = (s.perlin_speed_c100 / 100).toFixed(2) + ' u/s';
+            if (s.perlin_octaves !== undefined) {
+              document.getElementById('perlin-oct-sl').value = s.perlin_octaves;
+              document.getElementById('perlin-oct-val').textContent = s.perlin_octaves;
+            }
             if (s.mode === 2) {
               document.getElementById('pr-sl').value = s.r;
               document.getElementById('pg-sl').value = s.g;

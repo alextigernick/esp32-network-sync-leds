@@ -35,6 +35,7 @@ static settings_t      s_settings = {
     .sine_speed_c100   = 100,   // 1.00 Hz
     .perlin_scale_mm10 = 1000,  // 100.0 mm
     .perlin_speed_c100 = 100,   // 1.00 noise-units/s
+    .perlin_octaves    = 3,
 };
 static SemaphoreHandle_t s_mutex;
 static QueueHandle_t     s_forward_queue; // queue of settings_t to forward
@@ -48,7 +49,7 @@ void settings_encode(const settings_t *s, char *buf, int buf_size) {
     snprintf(buf, buf_size,
              "flash=%d&period=%lu&duty=%u&r=%u&g=%u&b=%u"
              "&mode=%u&speriod=%lu&sangle=%ld&sspeed=%ld"
-             "&pscale=%lu&pspeed=%ld",
+             "&pscale=%lu&pspeed=%ld&poct=%u",
              s->flash_enabled ? 1 : 0,
              (unsigned long)s->period_ms,
              (unsigned)s->duty_percent,
@@ -58,7 +59,8 @@ void settings_encode(const settings_t *s, char *buf, int buf_size) {
              (long)s->sine_angle_deg10,
              (long)s->sine_speed_c100,
              (unsigned long)s->perlin_scale_mm10,
-             (long)s->perlin_speed_c100);
+             (long)s->perlin_speed_c100,
+             (unsigned)s->perlin_octaves);
 }
 
 bool settings_decode(const char *body, settings_t *out) {
@@ -117,6 +119,12 @@ bool settings_decode(const char *body, settings_t *out) {
 
     p = strstr(body, "pspeed=");
     if (p) out->perlin_speed_c100 = (int32_t)strtol(p + 7, NULL, 10);
+
+    p = strstr(body, "poct=");
+    if (p) {
+        uint8_t v = (uint8_t)strtoul(p + 5, NULL, 10);
+        if (v >= 1 && v <= 8) out->perlin_octaves = v;
+    }
 
     return true;
 }
@@ -219,7 +227,7 @@ static void flash_task(void *arg) {
                     s_sine_buf[i * 3 + 2] = 0;
                     continue;
                 }
-                float bright = perlin_sample(x, y, time_s, scale_mm, speed) / 255.0f;
+                float bright = perlin_sample(x, y, time_s, scale_mm, speed, (int)cur.perlin_octaves) / 255.0f;
                 s_sine_buf[i * 3 + 0] = (uint8_t)(bright * cur.r);
                 s_sine_buf[i * 3 + 1] = (uint8_t)(bright * cur.g);
                 s_sine_buf[i * 3 + 2] = (uint8_t)(bright * cur.b);

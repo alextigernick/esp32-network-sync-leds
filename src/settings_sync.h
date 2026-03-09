@@ -33,6 +33,7 @@ typedef struct {
     // MODE_PERLIN
     uint32_t perlin_scale_mm10; // spatial scale in 0.1 mm units (1000 = 100.0 mm)
     int32_t  perlin_speed_c100; // temporal drift in 0.01 noise-units/s (100 = 1.00)
+    uint8_t  perlin_octaves;    // fBm octave count, 1–8
 } settings_t;
 
 // Return a snapshot of current settings.

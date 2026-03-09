@@ -109,22 +109,42 @@ static long inoise(uint32_t x, uint32_t y, uint32_t z) {
 }
 
 // ---------------------------------------------------------------------------
-// Public API
+// Public API — fractal Brownian motion (fBm)
 // ---------------------------------------------------------------------------
+//
+// Single-octave inoise() has output roughly in [-INOISE_MAX, +INOISE_MAX].
+// Empirically the Kasperkamperman implementation reaches about ±40000.
+// We normalise by the known fBm amplitude sum so the output is deterministic
+// and consistent across all nodes regardless of octave count.
+
+#define INOISE_MAX 40000.0f
 
 uint8_t perlin_sample(float x_mm, float y_mm, float time_s,
-                      float scale_mm, float speed) {
-    // Map mm → 16.16 noise space.  One noise "period" ≈ scale_mm.
-    float inv = (float)N / scale_mm;
-    uint32_t nx = (uint32_t)(x_mm  * inv);
-    uint32_t ny = (uint32_t)(y_mm  * inv);
-    uint32_t nz = (uint32_t)(time_s * speed * (float)N);
+                      float scale_mm, float speed, int octaves) {
+    if (octaves < 1) octaves = 1;
+    if (octaves > 8) octaves = 8;
 
-    long raw = inoise(nx, ny, nz);
-    // raw is roughly in [-N/2, N/2]; map to [0, 255]
-    // raw >> 9  ≈  raw / 512 → roughly ±128 → add 128 → 0..255
-    long v = 128 + (raw >> 9);
-    if (v < 0)   v = 0;
-    if (v > 255) v = 255;
-    return (uint8_t)v;
+    float inv  = 1.0f / scale_mm;
+    float amp  = 1.0f;
+    float freq = 1.0f;
+    float value    = 0.0f;
+    float amp_sum  = 0.0f;
+
+    for (int i = 0; i < octaves; i++) {
+        uint32_t nx = (uint32_t)(x_mm   * freq * inv   * (float)N);
+        uint32_t ny = (uint32_t)(y_mm   * freq * inv   * (float)N);
+        uint32_t nz = (uint32_t)(time_s * speed * freq * (float)N);
+        // inoise raw → float in [-1, 1]
+        float raw = (float)inoise(nx, ny, nz) / INOISE_MAX;
+        value   += raw * amp;
+        amp_sum += amp;
+        amp  *= 0.5f;
+        freq *= 2.0f;
+    }
+
+    // value ∈ [-amp_sum, +amp_sum]; map to [0, 1] then [0, 255]
+    float normalized = (value / amp_sum + 1.0f) * 0.5f;
+    if (normalized < 0.0f) normalized = 0.0f;
+    if (normalized > 1.0f) normalized = 1.0f;
+    return (uint8_t)(normalized * 255.0f);
 }
