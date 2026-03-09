@@ -249,9 +249,9 @@
       </div>
       <div class="row">
         <label>Speed</label>
-        <input type="range" id="perlin-speed-sl" min="-1000" max="1000" step="1" value="100"
-               oninput="updateSliderLabel('perlin-speed-sl','perlin-speed-val',v=>(v/100).toFixed(2)+' u/s'); scheduleSettingsPush()">
-        <span class="val" id="perlin-speed-val">1.00 u/s</span>
+        <input type="range" id="perlin-speed-sl" min="0" max="1000" step="1" value="100"
+               oninput="updateSliderLabel('perlin-speed-sl','perlin-speed-val',v=>(v/400).toFixed(3)+' u/s'); scheduleSettingsPush()">
+        <span class="val" id="perlin-speed-val">1.000 u/s</span>
       </div>
       <div class="row">
         <label>Octaves</label>
@@ -286,7 +286,7 @@
       </div>
       <div class="row">
         <label>Blend</label>
-        <select id="pal-blend-sel" onchange="scheduleSettingsPush()" style="flex:1">
+        <select id="pal-blend-sel" onchange="renderPalGradient(); scheduleSettingsPush()" style="flex:1">
           <option value="0">Linear</option>
           <option value="2">Cosine</option>
           <option value="1">Nearest</option>
@@ -490,21 +490,102 @@
       return '#' + (packed & 0xFFFFFF).toString(16).padStart(6, '0');
     }
 
+    // Parse '#rrggbb' → [r, g, b] 0-255
+    function hexToRgb(hex) {
+      const n = parseInt(hex.slice(1), 16);
+      return [(n >> 16) & 0xFF, (n >> 8) & 0xFF, n & 0xFF];
+    }
+    function rgbToHex(r, g, b) {
+      return '#' + [r, g, b].map(v => Math.round(v).toString(16).padStart(2, '0')).join('');
+    }
+
+    // Sample the palette at t ∈ [0,1] using current blend mode, return hex color
+    function palSample(t) {
+      const n = palStops.length;
+      if (n === 1) return palStops[0];
+      if (t <= 0) return palStops[0];
+      if (t >= 1) return palStops[n - 1];
+      const blend = +(document.getElementById('pal-blend-sel')?.value ?? 0);
+      const ft = t * 255;
+
+      // find segment
+      let idx = 0;
+      for (let i = 0; i < n - 2; i++) {
+        if (ft >= palPositions[i + 1] * 255) idx = i + 1;
+        else break;
+      }
+
+      if (blend === 1) {
+        // Nearest: midpoint cut
+        const mid = (palPositions[idx] + palPositions[idx + 1]) / 2;
+        return t < mid ? palStops[idx] : palStops[idx + 1];
+      }
+      if (blend === 3) {
+        // Step: hold color until next stop boundary
+        return palStops[idx];
+      }
+
+      const segStart = palPositions[idx] * 255;
+      const segEnd   = palPositions[idx + 1] * 255;
+      let frac = segEnd > segStart ? (ft - segStart) / (segEnd - segStart) : 0;
+      frac = Math.max(0, Math.min(1, frac));
+      if (blend === 2) frac = (1 - Math.cos(frac * Math.PI)) / 2; // cosine
+
+      const [r0, g0, b0] = hexToRgb(palStops[idx]);
+      const [r1, g1, b1] = hexToRgb(palStops[idx + 1]);
+      return rgbToHex(r0 + (r1 - r0) * frac, g0 + (g1 - g0) * frac, b0 + (b1 - b0) * frac);
+    }
+
     function renderPalGradient() {
       const el = document.getElementById('pal-gradient');
       const wrap = document.getElementById('pal-gradient-wrap');
+      const blend = +(document.getElementById('pal-blend-sel')?.value ?? 0);
 
+      let bg;
       if (palStops.length === 1) {
-        el.style.background = palStops[0];
-      } else {
+        bg = palStops[0];
+      } else if (blend === 0) {
+        // Linear: CSS linear-gradient is exact
         const pct = palStops.map((c, i) => `${c} ${Math.round(palPositions[i] * 100)}%`);
-        el.style.background = `linear-gradient(to right, ${pct.join(', ')})`;
+        bg = `linear-gradient(to right, ${pct.join(', ')})`;
+      } else if (blend === 1 || blend === 3) {
+        // Nearest / Step: hard-edged blocks via sampled stops
+        const stops = [];
+        palPositions.forEach((pos, i) => {
+          const pct = Math.round(pos * 100);
+          if (blend === 1) {
+            // color i holds from its pos to midpoint with next
+            if (i < palStops.length - 1) {
+              const mid = Math.round((palPositions[i] + palPositions[i + 1]) / 2 * 100);
+              stops.push(`${palStops[i]} ${pct}%`, `${palStops[i]} ${mid}%`);
+              stops.push(`${palStops[i + 1]} ${mid}%`);
+            } else {
+              stops.push(`${palStops[i]} ${pct}%`);
+            }
+          } else {
+            // Step: color i holds until next stop's exact position
+            stops.push(`${palStops[i]} ${pct}%`);
+            if (i < palStops.length - 1) {
+              stops.push(`${palStops[i]} ${Math.round(palPositions[i + 1] * 100)}%`);
+            }
+          }
+        });
+        bg = `linear-gradient(to right, ${stops.join(', ')})`;
+      } else {
+        // Cosine: sample at fine resolution to simulate S-curve
+        const SAMPLES = 64;
+        const stops = [];
+        for (let s = 0; s <= SAMPLES; s++) {
+          const t = s / SAMPLES;
+          stops.push(`${palSample(t)} ${Math.round(t * 100)}%`);
+        }
+        bg = `linear-gradient(to right, ${stops.join(', ')})`;
       }
+      el.style.background = bg;
 
-      // Rebuild handles for inner stops (not first/last)
+      // Rebuild handles for all stops
       wrap.querySelectorAll('.pal-handle').forEach(h => h.remove());
       palPositions.forEach((pos, i) => {
-        if (i === 0 || i === palStops.length - 1) return;
         const handle = document.createElement('div');
         handle.className = 'pal-handle';
         handle.style.left = (pos * 100) + '%';
@@ -521,15 +602,13 @@
         const wrap = document.getElementById('pal-gradient-wrap');
         const rect = wrap.getBoundingClientRect();
         const idx = +handle.dataset.idx;
-        const minPos = palPositions[idx - 1] + 0.01;
-        const maxPos = palPositions[idx + 1] - 0.01;
+        const minPos = idx === 0 ? 0 : palPositions[idx - 1] + 0.01;
+        const maxPos = idx === palStops.length - 1 ? 1 : palPositions[idx + 1] - 0.01;
         let pos = (clientX - rect.left) / rect.width;
         pos = Math.max(minPos, Math.min(maxPos, pos));
         palPositions[idx] = pos;
         handle.style.left = (pos * 100) + '%';
-        // Update gradient without rebuilding handles
-        const pct = palStops.map((c, i) => `${c} ${Math.round(palPositions[i] * 100)}%`);
-        document.getElementById('pal-gradient').style.background = `linear-gradient(to right, ${pct.join(', ')})`;
+        renderPalGradient();
         document.getElementById('pal-preset').value = '';
         scheduleSettingsPush();
       }
@@ -600,9 +679,6 @@
       if (palStops.length <= 1) return;
       palStops.splice(i, 1);
       palPositions.splice(i, 1);
-      // Clamp endpoints
-      palPositions[0] = 0;
-      palPositions[palPositions.length - 1] = 1;
       document.getElementById('pal-preset').value = '';
       renderPalStops();
       scheduleSettingsPush();
@@ -770,7 +846,7 @@
             document.getElementById('perlin-scale-sl').value = s.perlin_scale_mm10;
             document.getElementById('perlin-scale-val').textContent = (s.perlin_scale_mm10 / 10).toFixed(1) + ' mm';
             document.getElementById('perlin-speed-sl').value = s.perlin_speed_c100;
-            document.getElementById('perlin-speed-val').textContent = (s.perlin_speed_c100 / 100).toFixed(2) + ' u/s';
+            document.getElementById('perlin-speed-val').textContent = (s.perlin_speed_c100 / 400).toFixed(3) + ' u/s';
             if (s.perlin_octaves !== undefined) {
               document.getElementById('perlin-oct-sl').value = s.perlin_octaves;
               document.getElementById('perlin-oct-val').textContent = s.perlin_octaves;

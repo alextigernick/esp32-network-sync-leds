@@ -34,7 +34,7 @@ static settings_t      s_settings = {
     .sine_angle_deg10  = 0,
     .sine_speed_c100   = 100,   // 1.00 Hz
     .perlin_scale_mm10 = 1000,  // 100.0 mm
-    .perlin_speed_c100 = 100,   // 1.00 noise-units/s
+    .perlin_speed_c100 = 400,   // 1.00 noise-units/s
     .perlin_octaves    = 3,
     .pal_colors        = { 0x000000, 0xFFFFFF, 0x000000, 0x000000 },
     .pal_pos           = { 0, 255, 128, 192 },
@@ -334,7 +334,7 @@ static void flash_task(void *arg) {
                 time_phase = time_s * (cur.sine_speed_c100 / 100.0f) * 2.0f * (float)M_PI;
             } else {
                 scale_mm = cur.perlin_scale_mm10 / 10.0f;
-                speed    = cur.perlin_speed_c100  / 100.0f;
+                speed    = cur.perlin_speed_c100  / 400.0f;
                 octaves  = (int)cur.perlin_octaves;
             }
 
