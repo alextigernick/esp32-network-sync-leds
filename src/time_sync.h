@@ -32,3 +32,8 @@ void time_sync_get_debug(time_sync_debug_t *out);
 // Called with the IP of the peer that was synced to.
 // Must be set before starting any sync task.
 void time_sync_set_first_sync_cb(bool (*cb)(const char *peer_ip));
+
+// Register a callback invoked once the first time this node wins the
+// election and becomes the time root (elected mode only).
+// Must be set before starting any sync task.
+void time_sync_set_first_win_cb(void (*cb)(void));

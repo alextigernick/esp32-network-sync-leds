@@ -28,9 +28,15 @@ static char     s_role[20]    = "master";
 static bool     s_first_sync  = true;
 
 static bool (*s_first_sync_cb)(const char *peer_ip) = NULL;
+static void (*s_first_win_cb)(void) = NULL;
+static bool s_first_win = true;
 
 void time_sync_set_first_sync_cb(bool (*cb)(const char *peer_ip)) {
     s_first_sync_cb = cb;
+}
+
+void time_sync_set_first_win_cb(void (*cb)(void)) {
+    s_first_win_cb = cb;
 }
 
 void time_sync_get_debug(time_sync_debug_t *out) {
@@ -224,6 +230,12 @@ static void elected_slave_task(void *arg) {
     struct timeval tv = { .tv_sec = 1, .tv_usec = 0 };
     setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
+    // Wait one full discovery cycle before the first election so that any
+    // existing peers have had time to announce themselves.  Without this
+    // delay the node wins instantly (no peers yet) and loads its local
+    // preset before discovering the real root.
+    vTaskDelay(pdMS_TO_TICKS(DISCOVERY_INTERVAL_MS + 500));
+
     uint32_t my_u32 = ip_to_u32(s_my_ip);
 
     while (1) {
@@ -254,6 +266,11 @@ static void elected_slave_task(void *arg) {
 
         if (strcmp(best_ip, s_my_ip) == 0) {
             strncpy(s_role, "root", sizeof(s_role) - 1);
+            if (s_first_win && s_first_win_cb) {
+                s_first_win = false;
+                s_first_win_cb();
+                s_first_win_cb = NULL;
+            }
             vTaskDelay(pdMS_TO_TICKS(TIME_SYNC_INTERVAL_MS));
             continue;
         }

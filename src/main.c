@@ -180,8 +180,13 @@ void app_main(void) {
     }
     ESP_LOGI(TAG, "Node name: %s", s_my_name);
 
+    // Init settings mutex, LED driver, and flash task before any task that
+    // might call settings_get() (e.g. presets_apply_default via first_win_cb).
+    settings_start_flash_task();
+
     if (is_sta) {
         time_sync_set_first_sync_cb(settings_fetch_from_peer);
+        time_sync_set_first_win_cb(presets_apply_default);
         time_sync_start_elected(s_my_ip);
     } else {
         time_sync_start_master();
@@ -194,8 +199,12 @@ void app_main(void) {
     ESP_LOGI(TAG, "Starting web server...");
     web_server_start();
 
-    // Apply boot-default preset after settings mutex/task are initialized
-    presets_apply_default();
+    // AP node is always the time root — apply saved default preset immediately.
+    // STA nodes defer this until they win election (via first_win_cb) or
+    // fetch settings from the root peer on first time sync (via first_sync_cb).
+    if (!is_sta) {
+        presets_apply_default();
+    }
 
     ESP_LOGI(TAG, "System ready. http://%s/", s_my_ip);
 }

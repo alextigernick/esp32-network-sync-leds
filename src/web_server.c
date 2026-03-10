@@ -665,8 +665,6 @@ static esp_err_t handle_presets_set_default(httpd_req_t *req) {
 // ---- start -------------------------------------------------------------
 
 void web_server_start(void) {
-    settings_start_flash_task();
-
     httpd_config_t config    = HTTPD_DEFAULT_CONFIG();
     config.stack_size        = 8192;
     config.recv_wait_timeout = 30;
