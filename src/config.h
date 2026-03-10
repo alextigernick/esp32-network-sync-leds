@@ -12,6 +12,9 @@
 #define NUM_LEDS        8    // default; overridden at runtime by node_config
 #define MAX_LEDS        500  // compile-time buffer ceiling
 
+// Maximum number of independent LED strips (limited by ESP32-C3 RMT TX channels)
+#define MAX_STRIPS      2
+
 // UDP multicast group and port for peer discovery
 #define DISCOVERY_MCAST_ADDR  "239.0.0.1"
 #define DISCOVERY_PORT        5000

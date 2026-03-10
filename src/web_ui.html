@@ -328,12 +328,7 @@
     <!-- Node config -->
     <div class="card">
       <h2>Node Config</h2>
-      <div class="row">
-        <label>Strip len</label>
-        <input type="number" id="num-leds-inp" min="1" max="500" value="8"
-               style="flex:1;padding:.4rem;background:#282828;color:#eee;border:1px solid #444;border-radius:6px;font-family:monospace;font-size:.9rem">
-        <span class="val" style="min-width:2rem">LEDs</span>
-      </div>
+      <div id="strips-config"></div>
       <div class="row" style="margin-top:.5rem">
         <label>Max bright</label>
         <input type="range" id="max-bright-inp" min="0" max="255" value="255" style="flex:1">
@@ -956,7 +951,25 @@
         const r = await fetch('/node_config');
         if (!r.ok) return;
         const s = await r.json();
-        document.getElementById('num-leds-inp').value = s.num_leds;
+
+        // Render strip rows
+        const container = document.getElementById('strips-config');
+        container.innerHTML = '';
+        (s.strips || []).forEach((strip, i) => {
+          const disabled = strip.gpio === 255;
+          container.innerHTML += `
+            <div class="row" style="margin-bottom:.4rem;align-items:center;gap:.4rem">
+              <label style="min-width:3.5rem">Strip ${i}</label>
+              <label style="font-size:.8rem;color:#aaa">GPIO</label>
+              <input type="number" id="strip-gpio-${i}" min="0" max="254" value="${disabled ? '' : strip.gpio}"
+                     placeholder="off"
+                     style="width:3.5rem;padding:.3rem;background:#282828;color:#eee;border:1px solid #444;border-radius:6px;font-family:monospace;font-size:.9rem">
+              <label style="font-size:.8rem;color:#aaa">LEDs</label>
+              <input type="number" id="strip-leds-${i}" min="0" max="500" value="${strip.num_leds}"
+                     style="width:4rem;padding:.3rem;background:#282828;color:#eee;border:1px solid #444;border-radius:6px;font-family:monospace;font-size:.9rem">
+            </div>`;
+        });
+
         const mb = s.max_bright ?? 255;
         document.getElementById('max-bright-inp').value = mb;
         document.getElementById('max-bright-val').textContent = mb;
@@ -974,13 +987,25 @@
     });
 
     async function saveNodeConfig() {
-      const n  = document.getElementById('num-leds-inp').value;
       const mb = document.getElementById('max-bright-inp').value;
       const ct = document.getElementById('ct-bias-inp').value;
+      let body = 'max_bright=' + mb + '&ct_bias=' + ct;
+
+      // Collect per-strip fields
+      let i = 0;
+      while (document.getElementById('strip-gpio-' + i)) {
+        const gpioEl = document.getElementById('strip-gpio-' + i);
+        const ledsEl = document.getElementById('strip-leds-' + i);
+        const gpioVal = gpioEl.value.trim() === '' ? 255 : parseInt(gpioEl.value, 10);
+        body += '&strip_gpio_' + i + '=' + gpioVal;
+        body += '&strip_leds_' + i + '=' + (ledsEl.value || 0);
+        i++;
+      }
+
       await fetch('/node_config', {
         method: 'POST',
         headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-        body: 'num_leds=' + n + '&max_bright=' + mb + '&ct_bias=' + ct,
+        body,
       });
     }
 

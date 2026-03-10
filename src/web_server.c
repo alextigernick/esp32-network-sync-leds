@@ -376,43 +376,78 @@ static esp_err_t handle_settings_post(httpd_req_t *req) {
 // ---- /node_config GET --------------------------------------------------
 
 static esp_err_t handle_node_config_get(httpd_req_t *req) {
-    static char buf[64];
-    int len = snprintf(buf, sizeof(buf), "{\"num_leds\":%u,\"max_bright\":%u,\"ct_bias\":%d}",
-                       node_config_get_num_leds(), node_config_get_max_bright(),
-                       (int)node_config_get_ct_bias());
+    strip_cfg_t strips[MAX_STRIPS];
+    int strip_count;
+    node_config_get_strips(strips, &strip_count);
+
+    static char buf[128];
+    int pos = 0;
+    pos += snprintf(buf + pos, sizeof(buf) - pos,
+                    "{\"num_leds\":%u,\"max_bright\":%u,\"ct_bias\":%d,\"strips\":[",
+                    node_config_get_num_leds(), node_config_get_max_bright(),
+                    (int)node_config_get_ct_bias());
+    for (int i = 0; i < strip_count; i++) {
+        pos += snprintf(buf + pos, sizeof(buf) - pos,
+                        "%s{\"gpio\":%u,\"num_leds\":%u}",
+                        i > 0 ? "," : "", strips[i].gpio, strips[i].num_leds);
+    }
+    pos += snprintf(buf + pos, sizeof(buf) - pos, "]}");
+
     httpd_resp_set_type(req, "application/json");
-    httpd_resp_send(req, buf, len);
+    httpd_resp_send(req, buf, pos);
     return ESP_OK;
 }
 
 // ---- /node_config POST -------------------------------------------------
 
 static esp_err_t handle_node_config_post(httpd_req_t *req) {
-    char body[64] = {0};
+    char body[128] = {0};
     int recv_len = req->content_len < (int)sizeof(body) - 1
                    ? req->content_len : (int)sizeof(body) - 1;
     if (recv_len > 0) httpd_req_recv(req, body, recv_len);
 
-    char *p = strstr(body, "num_leds=");
-    if (p) {
-        uint16_t n = (uint16_t)strtoul(p + 9, NULL, 10);
-        node_config_save_num_leds(n);
-        led_set_count(node_config_get_num_leds()); // apply immediately (clamped)
+    bool changed = false;
+
+    // Per-strip config: strip_gpio_N and strip_leds_N
+    for (int i = 0; i < MAX_STRIPS; i++) {
+        char key_gpio[16], key_leds[16];
+        snprintf(key_gpio, sizeof(key_gpio), "strip_gpio_%d=", i);
+        snprintf(key_leds, sizeof(key_leds), "strip_leds_%d=", i);
+
+        char *pg = strstr(body, key_gpio);
+        char *pl = strstr(body, key_leds);
+        if (pg || pl) {
+            strip_cfg_t strips[MAX_STRIPS];
+            int count;
+            node_config_get_strips(strips, &count);
+            if (pg) strips[i].gpio     = (uint8_t)strtoul(pg + strlen(key_gpio), NULL, 10);
+            if (pl) strips[i].num_leds = (uint16_t)strtoul(pl + strlen(key_leds), NULL, 10);
+            node_config_save_strip(i, strips[i].gpio, strips[i].num_leds);
+            changed = true;
+        }
     }
-    p = strstr(body, "max_bright=");
+
+    char *p = strstr(body, "max_bright=");
     if (p) {
         uint8_t v = (uint8_t)strtoul(p + 11, NULL, 10);
         node_config_save_max_bright(v);
+        changed = true;
     }
     p = strstr(body, "ct_bias=");
     if (p) {
         int8_t v = (int8_t)strtol(p + 8, NULL, 10);
         node_config_save_ct_bias(v);
+        changed = true;
     }
-    if (!strstr(body, "num_leds=") && !strstr(body, "max_bright=") && !strstr(body, "ct_bias=")) {
+
+    if (!changed) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing node config field");
         return ESP_FAIL;
     }
+
+    // Re-initialize LED strips if strip config changed
+    if (strstr(body, "strip_gpio_") || strstr(body, "strip_leds_"))
+        led_reinit();
 
     httpd_resp_set_status(req, "204 No Content");
     httpd_resp_send(req, NULL, 0);
