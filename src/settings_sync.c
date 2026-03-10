@@ -427,9 +427,10 @@ uint32_t settings_get_fwd_stack_hwm(void)   {
 }
 
 static void flash_task(void *arg) {
+    TickType_t wake = xTaskGetTickCount();
     for (;;) {
         s_frame_count++;
-        if ((s_frame_count & 0x3F) == 0)  // every 64 frames (~640 ms)
+        if ((s_frame_count & 0x3F) == 0)  // every 64 frames (~1280 ms at 50 Hz)
             s_flash_stack_hwm = uxTaskGetStackHighWaterMark(NULL);
 
         // Identify mode: override all LEDs with full white for duration
@@ -440,7 +441,7 @@ static void flash_task(void *arg) {
             uint8_t id_bright = node_config_get_max_bright();
             memset(s_pattern_buf, id_bright, n * 3);
             led_write_rgb(s_pattern_buf, n);
-            vTaskDelay(pdMS_TO_TICKS(10));
+            vTaskDelayUntil(&wake, pdMS_TO_TICKS(20));
             continue;
         }
 
@@ -562,7 +563,7 @@ static void flash_task(void *arg) {
             }
         }
 
-        vTaskDelay(pdMS_TO_TICKS(10)); // 10 ms resolution
+        vTaskDelayUntil(&wake, pdMS_TO_TICKS(20)); // 50 Hz
     }
 }
 
