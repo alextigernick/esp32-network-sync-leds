@@ -380,7 +380,7 @@ static esp_err_t handle_node_config_get(httpd_req_t *req) {
     int strip_count;
     node_config_get_strips(strips, &strip_count);
 
-    static char buf[128];
+    static char buf[256];
     int pos = 0;
     pos += snprintf(buf + pos, sizeof(buf) - pos,
                     "{\"num_leds\":%u,\"max_bright\":%u,\"ct_bias\":%d,\"strips\":[",
@@ -401,7 +401,7 @@ static esp_err_t handle_node_config_get(httpd_req_t *req) {
 // ---- /node_config POST -------------------------------------------------
 
 static esp_err_t handle_node_config_post(httpd_req_t *req) {
-    char body[128] = {0};
+    char body[256] = {0};
     int recv_len = req->content_len < (int)sizeof(body) - 1
                    ? req->content_len : (int)sizeof(body) - 1;
     if (recv_len > 0) httpd_req_recv(req, body, recv_len);

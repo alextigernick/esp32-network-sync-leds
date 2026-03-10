@@ -9,8 +9,10 @@
 #define NS  "node_cfg"
 
 static strip_cfg_t s_strips[MAX_STRIPS] = {
-    { .gpio = LED_GPIO, .num_leds = NUM_LEDS },
-    { .gpio = 255,      .num_leds = 0        },
+    { .gpio = 255, .num_leds = 0 },
+    { .gpio = 255, .num_leds = 0 },
+    { .gpio = 255, .num_leds = 0 },
+    { .gpio = 255, .num_leds = 0 },
 };
 static uint8_t s_max_bright = 255;
 static int8_t  s_ct_bias    = 0;
@@ -43,9 +45,9 @@ void node_config_load(void) {
 
     nvs_close(h);
 
-    ESP_LOGI(TAG, "loaded: strip0={gpio=%u,leds=%u} strip1={gpio=%u,leds=%u} max_bright=%u ct_bias=%d",
-             s_strips[0].gpio, s_strips[0].num_leds,
-             s_strips[1].gpio, s_strips[1].num_leds,
+    ESP_LOGI(TAG, "loaded: strips={%u/%u, %u/%u, %u/%u, %u/%u} max_bright=%u ct_bias=%d",
+             s_strips[0].gpio, s_strips[0].num_leds, s_strips[1].gpio, s_strips[1].num_leds,
+             s_strips[2].gpio, s_strips[2].num_leds, s_strips[3].gpio, s_strips[3].num_leds,
              s_max_bright, (int)s_ct_bias);
 }
 

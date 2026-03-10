@@ -7,13 +7,14 @@
 // AP address (fixed)
 #define AP_IP           "192.168.4.1"
 
-// WS2812B strip: data pin, default length, and hard maximum (sets pixel buffer size)
-#define LED_GPIO        20
-#define NUM_LEDS        8    // default; overridden at runtime by node_config
-#define MAX_LEDS        500  // compile-time buffer ceiling
+// WS2812B strip: hard maximum pixel count (sets compile-time buffer size).
+// Default strip config is all-disabled; configure pins via the web UI.
+#define MAX_LEDS        2000  // compile-time buffer ceiling
 
-// Maximum number of independent LED strips (limited by ESP32-C3 RMT TX channels)
-#define MAX_STRIPS      2
+// Maximum number of independent LED strips.
+// The ESP32-C3 has 2 RMT TX channels; strips are driven in two sequential phases
+// (0+1 then 2+3) with the RMT signals rerouted via the GPIO matrix between phases.
+#define MAX_STRIPS      4
 
 // UDP multicast group and port for peer discovery
 #define DISCOVERY_MCAST_ADDR  "239.0.0.1"
