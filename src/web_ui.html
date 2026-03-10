@@ -952,6 +952,9 @@
         if (!r.ok) return;
         const s = await r.json();
 
+        // Store active strips for layout coloring
+        _strips = (s.strips || []).filter(s => s.gpio !== 255 && s.num_leds > 0);
+
         // Render strip rows
         const container = document.getElementById('strips-config');
         container.innerHTML = '';
@@ -1007,6 +1010,9 @@
         headers: {'Content-Type': 'application/x-www-form-urlencoded'},
         body,
       });
+      await fetchNodeConfig();
+      const pts = parseCsv(_layoutCsv);
+      if (pts.length) renderLayoutPlot(pts);
     }
 
     // ---- grid config -------------------------------------------------------
@@ -1055,6 +1061,23 @@
     // ---- pixel layout -------------------------------------------------------
 
     let _layoutCsv = '';
+    let _strips = [];  // kept in sync with fetchNodeConfig
+
+    const STRIP_COLORS = ['#4af', '#f84', '#4f8', '#f4a', '#af4', '#a4f'];
+
+    function stripColor(stripIdx) {
+      return STRIP_COLORS[stripIdx % STRIP_COLORS.length];
+    }
+
+    function stripForIdx(pixelIdx) {
+      let offset = 0;
+      for (let i = 0; i < _strips.length; i++) {
+        const n = _strips[i].num_leds;
+        if (pixelIdx < offset + n) return i;
+        offset += n;
+      }
+      return 0;  // fallback: treat as strip 0 if no config loaded
+    }
 
     function parseCsv(text) {
       const pts = [];
@@ -1082,8 +1105,9 @@
         body: 'idx=' + next,
       });
       document.querySelectorAll('#layout-plot circle').forEach(c => {
+        if (!c.dataset.idx) return;  // skip legend dots
         const active = +c.dataset.idx === _activePixelIdx;
-        c.setAttribute('fill', active ? '#ff0' : '#0f9');
+        c.setAttribute('fill', active ? '#ff0' : stripColor(stripForIdx(+c.dataset.idx)));
         c.setAttribute('r', active ? '5' : '3');
       });
     }
@@ -1092,23 +1116,40 @@
       const svg = document.getElementById('layout-plot');
       const W = svg.clientWidth || 300, H = svg.clientHeight || 200;
       const PAD = 16;
+      const LEGEND_H = _strips.length > 1 ? 20 : 0;
       if (!points.length) { svg.innerHTML = ''; return; }
       const xs = points.map(p => p.x), ys = points.map(p => p.y);
       const minX = Math.min(...xs), maxX = Math.max(...xs);
       const minY = Math.min(...ys), maxY = Math.max(...ys);
       const rangeX = maxX - minX || 1, rangeY = maxY - minY || 1;
-      const scale  = Math.min((W - 2*PAD) / rangeX, (H - 2*PAD) / rangeY);
+      const scale  = Math.min((W - 2*PAD) / rangeX, (H - 2*PAD - LEGEND_H) / rangeY);
       const sx = x => PAD + (x - minX) * scale;
       const sy = y => PAD + (y - minY) * scale;
       const sorted = [...points].sort((a, b) => a.idx - b.idx);
       let html = '';
+      // Wire lines — only within the same strip
       for (let i = 1; i < sorted.length; i++) {
         const a = sorted[i - 1], b = sorted[i];
-        html += `<line x1="${sx(a.x).toFixed(1)}" y1="${sy(a.y).toFixed(1)}" x2="${sx(b.x).toFixed(1)}" y2="${sy(b.y).toFixed(1)}" stroke="#444" stroke-width="1"/>`;
+        if (stripForIdx(a.idx) !== stripForIdx(b.idx)) continue;
+        const col = stripColor(stripForIdx(a.idx));
+        html += `<line x1="${sx(a.x).toFixed(1)}" y1="${sy(a.y).toFixed(1)}" x2="${sx(b.x).toFixed(1)}" y2="${sy(b.y).toFixed(1)}" stroke="${col}" stroke-width="1" opacity="0.35"/>`;
       }
+      // Pixel dots
       for (const p of points) {
         const active = p.idx === _activePixelIdx;
-        html += `<circle cx="${sx(p.x).toFixed(1)}" cy="${sy(p.y).toFixed(1)}" r="${active ? 5 : 3}" fill="${active ? '#ff0' : '#0f9'}" opacity="0.85" style="cursor:pointer" data-idx="${p.idx}" onclick="setPixel(${p.idx})"><title>${p.idx}: (${p.x}, ${p.y})</title></circle>`;
+        const col = active ? '#ff0' : stripColor(stripForIdx(p.idx));
+        html += `<circle cx="${sx(p.x).toFixed(1)}" cy="${sy(p.y).toFixed(1)}" r="${active ? 5 : 3}" fill="${col}" opacity="0.9" style="cursor:pointer" data-idx="${p.idx}" onclick="setPixel(${p.idx})"><title>idx ${p.idx} · strip ${stripForIdx(p.idx)} · (${p.x}, ${p.y})</title></circle>`;
+      }
+      // Legend
+      if (_strips.length > 1) {
+        const ly = H - LEGEND_H + 4;
+        let lx = PAD;
+        for (let i = 0; i < _strips.length; i++) {
+          const col = stripColor(i);
+          html += `<circle cx="${lx + 5}" cy="${ly + 6}" r="4" fill="${col}"/>`;
+          html += `<text x="${lx + 13}" y="${ly + 10}" fill="#bbb" font-size="10" font-family="monospace">strip ${i} (${_strips[i].num_leds} LEDs)</text>`;
+          lx += 110;
+        }
       }
       svg.innerHTML = html;
     }
@@ -1256,8 +1297,7 @@
     updateColor();
     renderPalStops();
     fetchState();
-    fetchNodeConfig();
-    fetchAndRenderLayout();
+    fetchNodeConfig().then(fetchAndRenderLayout);
     fetchPresets();
     setInterval(fetchState, 3000);
   </script>
