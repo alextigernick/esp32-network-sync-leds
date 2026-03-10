@@ -23,7 +23,7 @@
 #define NUM_RMT_CHANNELS 2
 
 static rmt_channel_handle_t s_chan[NUM_RMT_CHANNELS] = {0};
-static rmt_encoder_handle_t s_encoder = NULL;
+static rmt_encoder_handle_t s_encoder[NUM_RMT_CHANNELS] = {0};
 static SemaphoreHandle_t s_mutex = NULL;
 
 static uint8_t  s_strip_gpio[MAX_STRIPS];
@@ -109,7 +109,9 @@ static void create_rmt_channels(void)
         .flags.msb_first = 1,
     };
 
-    ESP_ERROR_CHECK(rmt_new_bytes_encoder(&enc_cfg, &s_encoder));
+    for (int ch = 0; ch < NUM_RMT_CHANNELS; ch++) {
+        ESP_ERROR_CHECK(rmt_new_bytes_encoder(&enc_cfg, &s_encoder[ch]));
+    }
 
     for (int ch = 0; ch < NUM_RMT_CHANNELS; ch++) {
 
@@ -133,6 +135,7 @@ static void create_rmt_channels(void)
             .resolution_hz = RMT_RESOLUTION_HZ,
             .mem_block_symbols = 48,
             .trans_queue_depth = 4,
+            .intr_priority = 3,
         };
 
         ESP_ERROR_CHECK(rmt_new_tx_channel(&chan_cfg, &s_chan[ch]));
@@ -159,9 +162,11 @@ static void delete_rmt_channels(void)
         s_chan[i] = NULL;
     }
 
-    if (s_encoder) {
-        rmt_del_encoder(s_encoder);
-        s_encoder = NULL;
+    for (int i = 0; i < NUM_RMT_CHANNELS; i++) {
+        if (s_encoder[i]) {
+            rmt_del_encoder(s_encoder[i]);
+            s_encoder[i] = NULL;
+        }
     }
 }
 
@@ -217,7 +222,7 @@ static void transmit_all(void)
     // transmit remaining strips in parallel pairs
     for (int base = 0; base < s_num_strips; base += NUM_RMT_CHANNELS) {
 
-        
+
         for (int ch = 0; ch < NUM_RMT_CHANNELS; ch++) {
             int si = base + ch;
             if (si >= s_num_strips)
@@ -237,12 +242,10 @@ static void transmit_all(void)
 
             rmt_transmit(
                 s_chan[ch],
-                s_encoder,
+                s_encoder[ch],
                 s_pixels + s_strip_offset[si] * 3,
                 s_strip_leds[si] * 3,
                 &tx_cfg);
-            ESP_LOGI(TAG,
-             "transmitting %d on %d",s_strip_leds[si], si);
         }
 
         // wait for both channels
