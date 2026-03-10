@@ -26,6 +26,7 @@ static uint32_t s_sync_count  = 0;
 static uint32_t s_fail_count  = 0;
 static char     s_role[20]    = "master";
 static bool     s_first_sync  = true;
+static TaskHandle_t s_task_handle = NULL;
 
 static bool (*s_first_sync_cb)(const char *peer_ip) = NULL;
 static void (*s_first_win_cb)(void) = NULL;
@@ -121,7 +122,7 @@ static void master_task(void *arg) {
 }
 
 static void start_master_task(void) {
-    xTaskCreate(master_task, "time_master", 4096, NULL, 3, NULL);
+    xTaskCreate(master_task, "time_master", 4096, NULL, 3, &s_task_handle);
 }
 
 void time_sync_start_master(void) {
@@ -210,7 +211,7 @@ static void slave_task(void *arg) {
 void time_sync_start_slave(const char *master_ip) {
     strncpy(s_master_ip, master_ip, 15);
     strncpy(s_role, "slave", sizeof(s_role) - 1);
-    xTaskCreate(slave_task, "time_slave", 4096, NULL, 3, NULL);
+    xTaskCreate(slave_task, "time_slave", 4096, NULL, 3, &s_task_handle);
 }
 
 // ---------------------------------------------------------------------------
@@ -289,5 +290,9 @@ void time_sync_start_elected(const char *my_ip) {
     strncpy(s_my_ip, my_ip, sizeof(s_my_ip) - 1);
     strncpy(s_role, "elected", sizeof(s_role) - 1);
     start_master_task();
-    xTaskCreate(elected_slave_task, "time_elected", 4096, NULL, 3, NULL);
+    xTaskCreate(elected_slave_task, "time_elected", 4096, NULL, 3, &s_task_handle);
+}
+
+uint32_t time_sync_get_stack_hwm(void) {
+    return s_task_handle ? uxTaskGetStackHighWaterMark(s_task_handle) : 0;
 }

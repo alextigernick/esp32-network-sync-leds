@@ -403,6 +403,12 @@
   <!-- ===== TAB: Debug ===== -->
   <div class="tab-panel" id="tab-debug">
 
+    <!-- Locate this panel -->
+    <div class="card">
+      <h2>Node</h2>
+      <button class="btn-on" onclick="identify()">Locate This Panel</button>
+    </div>
+
     <!-- Time sync debug -->
     <div class="card">
       <h2>Time Sync</h2>
@@ -421,6 +427,28 @@
                 style="border:1px solid #333;border-radius:4px;display:block"></canvas>
       </div>
       <div style="font-size:.7rem;color:#555;text-align:center;margin-top:.2rem">offset jitter</div>
+    </div>
+
+    <!-- Performance -->
+    <div class="card">
+      <h2>Performance</h2>
+      <div class="kv"><span>render loop fps</span><span id="ts-fps">—</span></div>
+      <div class="kv"><span>free heap</span><span id="ts-heap">—</span></div>
+    </div>
+
+    <!-- Stack high-water marks -->
+    <div class="card">
+      <h2>Stack High-Water Marks</h2>
+      <div style="font-size:.75rem;color:#666;margin-bottom:.6rem;line-height:1.4">
+        Minimum free stack space ever seen on each task (words = 4 bytes each).
+        Lower = closer to overflow. Values update every ~640 ms.
+      </div>
+      <div class="kv"><span>render</span><span id="hwm-render">—</span></div>
+      <div class="kv"><span>settings fwd</span><span id="hwm-fwd">—</span></div>
+      <div class="kv"><span>web server</span><span id="hwm-web">—</span></div>
+      <div class="kv"><span>time sync</span><span id="hwm-time">—</span></div>
+      <div class="kv"><span>disc listen</span><span id="hwm-disc-listen">—</span></div>
+      <div class="kv"><span>disc announce</span><span id="hwm-disc-ann">—</span></div>
     </div>
 
     <!-- OTA update -->
@@ -920,6 +948,24 @@
         else { rttEl.textContent = (s.ts_rtt_us / 1000).toFixed(2) + ' ms'; rttEl.className = ''; }
         document.getElementById('ts-counts').textContent = s.ts_sync_count + ' / ' + s.ts_fail_count;
 
+        // FPS estimate from frame_count delta
+        { const now = Date.now(); const fc = s.frame_count;
+          if (window._lastFc !== undefined && window._lastFcTime) {
+            const dt = (now - window._lastFcTime) / 1000;
+            const df = (fc - window._lastFc + 0x100000000) >>> 0;
+            if (dt > 0.05) document.getElementById('ts-fps').textContent = (df / dt).toFixed(1) + ' fps';
+          }
+          window._lastFc = fc; window._lastFcTime = now; }
+
+        document.getElementById('ts-heap').textContent = s.free_heap !== undefined ? (s.free_heap / 1024).toFixed(1) + ' KB' : '—';
+        const hwmFmt = v => v !== undefined ? v + ' words' : '—';
+        document.getElementById('hwm-render').textContent      = hwmFmt(s.hwm_render);
+        document.getElementById('hwm-fwd').textContent         = hwmFmt(s.hwm_fwd);
+        document.getElementById('hwm-web').textContent         = hwmFmt(s.hwm_web);
+        document.getElementById('hwm-time').textContent        = hwmFmt(s.hwm_time);
+        document.getElementById('hwm-disc-listen').textContent = hwmFmt(s.hwm_disc_listen);
+        document.getElementById('hwm-disc-ann').textContent    = hwmFmt(s.hwm_disc_ann);
+
         // OTA badge
         const badge = document.getElementById('ota-badge');
         if (s.ota_pending) { badge.textContent = 'PENDING VERIFY'; badge.className = 'badge badge-pending'; }
@@ -936,6 +982,10 @@
         body: 'state=' + (turningOn ? 'on' : 'off'),
       });
       await fetchState();
+    }
+
+    async function identify() {
+      await fetch('/identify', {method: 'POST'});
     }
 
     async function verify() {

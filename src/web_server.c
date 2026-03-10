@@ -130,7 +130,7 @@ static esp_err_t handle_state(httpd_req_t *req) {
     time_sync_debug_t dbg;
     time_sync_get_debug(&dbg);
 
-    static char buf[1280];
+    static char buf[1536];
     int pos = 0;
 
 #define A(...) pos += snprintf(buf + pos, sizeof(buf) - pos, __VA_ARGS__)
@@ -139,9 +139,20 @@ static esp_err_t handle_state(httpd_req_t *req) {
     settings_get(&cfg);
 
     uint32_t uptime_ms = (uint32_t)(esp_timer_get_time() / 1000);
+    uint32_t free_heap        = esp_get_free_heap_size();
+    uint32_t frame_count      = settings_get_frame_count();
+    uint32_t hwm_render       = settings_get_flash_stack_hwm();
+    uint32_t hwm_fwd          = settings_get_fwd_stack_hwm();
+    uint32_t hwm_web          = uxTaskGetStackHighWaterMark(NULL);
+    uint32_t hwm_time         = time_sync_get_stack_hwm();
+    uint32_t hwm_disc_listen  = discovery_get_listen_stack_hwm();
+    uint32_t hwm_disc_ann     = discovery_get_announce_stack_hwm();
     A("{\"led\":%s,\"sync_ms\":%llu,\"ota_pending\":%s"
       ",\"ts_role\":\"%s\",\"ts_offset_us\":%lld,\"ts_rtt_us\":%lld"
       ",\"ts_sync_count\":%lu,\"ts_fail_count\":%lu,\"uptime_ms\":%lu"
+      ",\"free_heap\":%lu,\"frame_count\":%lu"
+      ",\"hwm_render\":%lu,\"hwm_fwd\":%lu,\"hwm_web\":%lu"
+      ",\"hwm_time\":%lu,\"hwm_disc_listen\":%lu,\"hwm_disc_ann\":%lu"
       ",\"flash_enabled\":%s,\"period_ms\":%lu,\"duty_percent\":%u"
       ",\"r\":%u,\"g\":%u,\"b\":%u"
       ",\"mode\":%u,\"sine_period_mm10\":%lu,\"sine_angle_deg10\":%ld,\"sine_speed_c100\":%ld"
@@ -160,6 +171,9 @@ static esp_err_t handle_state(httpd_req_t *req) {
       (unsigned long)dbg.sync_count,
       (unsigned long)dbg.fail_count,
       (unsigned long)uptime_ms,
+      (unsigned long)free_heap, (unsigned long)frame_count,
+      (unsigned long)hwm_render, (unsigned long)hwm_fwd, (unsigned long)hwm_web,
+      (unsigned long)hwm_time, (unsigned long)hwm_disc_listen, (unsigned long)hwm_disc_ann,
       cfg.flash_enabled ? "true" : "false",
       (unsigned long)cfg.period_ms,
       (unsigned)cfg.duty_percent,
@@ -454,6 +468,15 @@ static esp_err_t handle_node_config_post(httpd_req_t *req) {
     return ESP_OK;
 }
 
+// ---- /identify POST ----------------------------------------------------
+
+static esp_err_t handle_identify(httpd_req_t *req) {
+    settings_identify(3000);  // flash white for 3 s on this node only
+    httpd_resp_set_status(req, "204 No Content");
+    httpd_resp_send(req, NULL, 0);
+    return ESP_OK;
+}
+
 // ---- /led_pixel POST ---------------------------------------------------
 
 static esp_err_t handle_led_pixel_post(httpd_req_t *req) {
@@ -721,7 +744,7 @@ void web_server_start(void) {
     config.stack_size        = 8192;
     config.recv_wait_timeout = 30;
     config.send_wait_timeout = 10;
-    config.max_uri_handlers  = 18;
+    config.max_uri_handlers  = 19;
     config.max_open_sockets  = 5;    // leave room for discovery/time_sync/forward_task sockets
     config.lru_purge_enable  = true; // recycle oldest idle socket when at max_open_sockets
 
@@ -746,6 +769,7 @@ void web_server_start(void) {
         { .uri = "/pixel_layout",   .method = HTTP_GET,  .handler = handle_pixel_layout_get   },
         { .uri = "/pixel_layout",   .method = HTTP_POST, .handler = handle_pixel_layout_post  },
         { .uri = "/led_pixel",        .method = HTTP_POST, .handler = handle_led_pixel_post        },
+        { .uri = "/identify",         .method = HTTP_POST, .handler = handle_identify              },
         { .uri = "/presets",          .method = HTTP_GET,  .handler = handle_presets_get           },
         { .uri = "/presets/save",     .method = HTTP_POST, .handler = handle_presets_save          },
         { .uri = "/presets/load",     .method = HTTP_POST, .handler = handle_presets_load          },

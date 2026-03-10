@@ -67,3 +67,11 @@ bool settings_fetch_from_peer(const char *peer_ip);
 
 // Start the LED flash task.  Call once after GPIO is configured.
 void settings_start_flash_task(void);
+
+// Briefly flash all LEDs white on this node for duration_ms (local only).
+void settings_identify(uint32_t duration_ms);
+
+// Diagnostic counters updated by the flash task.
+uint32_t settings_get_frame_count(void);
+uint32_t settings_get_flash_stack_hwm(void); // words remaining
+uint32_t settings_get_fwd_stack_hwm(void);   // words remaining

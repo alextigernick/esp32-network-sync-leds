@@ -16,3 +16,7 @@ void discovery_start(const char *my_ip, const char *my_name);
 
 // Copy current peer list into out[]. Returns count.
 int discovery_get_peers(peer_t *out, int max);
+
+// Stack high-water-marks (words remaining) for the two discovery tasks.
+uint32_t discovery_get_listen_stack_hwm(void);
+uint32_t discovery_get_announce_stack_hwm(void);

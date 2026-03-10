@@ -6,6 +6,7 @@
 #include "driver/gpio.h"
 #include "driver/rmt_tx.h"
 #include "soc/rmt_periph.h"
+#include "soc/gpio_periph.h"
 #include "soc/io_mux_reg.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -24,6 +25,7 @@
 
 static rmt_channel_handle_t s_chan[NUM_RMT_CHANNELS] = {0};
 static rmt_encoder_handle_t s_encoder[NUM_RMT_CHANNELS] = {0};
+static int s_chan_gpio[NUM_RMT_CHANNELS];  // current GPIO assigned to each channel
 static SemaphoreHandle_t s_mutex = NULL;
 
 static uint8_t  s_strip_gpio[MAX_STRIPS];
@@ -98,6 +100,9 @@ static void init_strips_from_config(void)
 
 static void create_rmt_channels(void)
 {
+    for (int i = 0; i < NUM_RMT_CHANNELS; i++)
+        s_chan_gpio[i] = -1;
+
     if (s_num_strips == 0)
         return;
 
@@ -139,7 +144,12 @@ static void create_rmt_channels(void)
         };
 
         ESP_ERROR_CHECK(rmt_new_tx_channel(&chan_cfg, &s_chan[ch]));
+        s_chan_gpio[ch] = gpio;
+        gpio_set_level(gpio, 0);
+        gpio_pullup_dis(gpio);
+        gpio_pulldown_dis(gpio);
         ESP_LOGI(TAG, "Registered tx channel\n");
+
     }
     for (int ch = 0; ch < NUM_RMT_CHANNELS; ch++) {
         if (s_chan[ch])
@@ -227,10 +237,14 @@ static void transmit_all(void)
             int si = base + ch;
             if (si >= s_num_strips)
                 continue;
+            if (s_chan_gpio[ch] != s_strip_gpio[si]) {
+                rmt_disable(s_chan[ch]);
+                rmt_tx_switch_gpio(s_chan[ch], s_strip_gpio[si], false);
+                PIN_FUNC_SELECT(GPIO_PIN_MUX_REG[s_strip_gpio[si]], PIN_FUNC_GPIO);
+                rmt_enable(s_chan[ch]);
+                s_chan_gpio[ch] = s_strip_gpio[si];
+            }
 
-            rmt_disable(s_chan[ch]);
-            rmt_tx_switch_gpio(s_chan[ch],s_strip_gpio[si],false);
-            rmt_enable(s_chan[ch]);
         }
 
         for (int ch = 0; ch < NUM_RMT_CHANNELS; ch++) {
@@ -246,6 +260,7 @@ static void transmit_all(void)
                 s_pixels + s_strip_offset[si] * 3,
                 s_strip_leds[si] * 3,
                 &tx_cfg);
+                
         }
 
         // wait for both channels

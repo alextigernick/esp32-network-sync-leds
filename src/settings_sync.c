@@ -14,6 +14,7 @@
 #include "led.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
@@ -24,6 +25,11 @@
 // ---------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------
+
+static volatile uint64_t s_identify_until_ms = 0;
+static volatile uint32_t s_frame_count       = 0;
+static volatile uint32_t s_flash_stack_hwm   = 0;
+static TaskHandle_t      s_fwd_task_handle   = NULL;
 
 static settings_t      s_settings = {
     .mode          = MODE_FLASH,
@@ -323,8 +329,34 @@ static inline void apply_ct(uint8_t *r, uint8_t *b) {
         *r = (uint8_t)(*r * (1.0f + ct * 0.0025f)); // ct negative, so this dims
 }
 
+void settings_identify(uint32_t duration_ms) {
+    uint64_t now = (uint64_t)(esp_timer_get_time() / 1000);
+    s_identify_until_ms = now + duration_ms;
+}
+
+uint32_t settings_get_frame_count(void)     { return s_frame_count; }
+uint32_t settings_get_flash_stack_hwm(void) { return s_flash_stack_hwm; }
+uint32_t settings_get_fwd_stack_hwm(void)   {
+    return s_fwd_task_handle ? uxTaskGetStackHighWaterMark(s_fwd_task_handle) : 0;
+}
+
 static void flash_task(void *arg) {
     for (;;) {
+        s_frame_count++;
+        if ((s_frame_count & 0x3F) == 0)  // every 64 frames (~640 ms)
+            s_flash_stack_hwm = uxTaskGetStackHighWaterMark(NULL);
+
+        // Identify mode: override all LEDs with full white for duration
+        uint64_t now_ms = (uint64_t)(esp_timer_get_time() / 1000);
+        if (s_identify_until_ms && now_ms < s_identify_until_ms) {
+            int n = node_config_get_num_leds();
+            if (n > MAX_LEDS) n = MAX_LEDS;
+            memset(s_pattern_buf, 0xFF, n * 3);
+            led_write_rgb(s_pattern_buf, n);
+            vTaskDelay(pdMS_TO_TICKS(10));
+            continue;
+        }
+
         settings_t cur;
         settings_get(&cur);
 
@@ -451,5 +483,5 @@ void settings_start_flash_task(void) {
     led_init();
 
     xTaskCreate(flash_task,   "flash",   4096, NULL, 3, NULL);
-    xTaskCreate(forward_task, "fwd_set", 4096, NULL, 3, NULL);
+    xTaskCreate(forward_task, "fwd_set", 4096, NULL, 3, &s_fwd_task_handle);
 }

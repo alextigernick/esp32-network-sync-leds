@@ -20,6 +20,8 @@
 static peer_t s_peers[MAX_PEERS];
 static int    s_peer_count = 0;
 static SemaphoreHandle_t s_mutex = NULL;
+static TaskHandle_t s_listen_task   = NULL;
+static TaskHandle_t s_announce_task = NULL;
 
 static char s_my_ip[16];
 static char s_my_name[PEER_NAME_LEN];
@@ -162,8 +164,15 @@ void discovery_start(const char *my_ip, const char *my_name) {
     strncpy(s_my_ip,   my_ip,   15);
     strncpy(s_my_name, my_name, PEER_NAME_LEN - 1);
 
-    xTaskCreate(listen_task,   "disc_listen",   6144, NULL, 3, NULL);
-    xTaskCreate(announce_task, "disc_announce", 4096, NULL, 3, NULL);
+    xTaskCreate(listen_task,   "disc_listen",   6144, NULL, 3, &s_listen_task);
+    xTaskCreate(announce_task, "disc_announce", 4096, NULL, 3, &s_announce_task);
+}
+
+uint32_t discovery_get_listen_stack_hwm(void) {
+    return s_listen_task   ? uxTaskGetStackHighWaterMark(s_listen_task)   : 0;
+}
+uint32_t discovery_get_announce_stack_hwm(void) {
+    return s_announce_task ? uxTaskGetStackHighWaterMark(s_announce_task) : 0;
 }
 
 int discovery_get_peers(peer_t *out, int max) {

@@ -37,3 +37,6 @@ void time_sync_set_first_sync_cb(bool (*cb)(const char *peer_ip));
 // election and becomes the time root (elected mode only).
 // Must be set before starting any sync task.
 void time_sync_set_first_win_cb(void (*cb)(void));
+
+// Stack high-water-mark of the running time sync task (words remaining).
+uint32_t time_sync_get_stack_hwm(void);
