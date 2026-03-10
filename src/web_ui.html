@@ -334,6 +334,18 @@
                style="flex:1;padding:.4rem;background:#282828;color:#eee;border:1px solid #444;border-radius:6px;font-family:monospace;font-size:.9rem">
         <span class="val" style="min-width:2rem">LEDs</span>
       </div>
+      <div class="row" style="margin-top:.5rem">
+        <label>Max bright</label>
+        <input type="range" id="max-bright-inp" min="0" max="255" value="255" style="flex:1">
+        <span class="val" id="max-bright-val" style="min-width:2.5rem">255</span>
+      </div>
+      <div class="row" style="margin-top:.5rem">
+        <label>Color temp</label>
+        <input type="range" id="ct-bias-inp" min="-100" max="100" step="5" value="0" style="flex:1">
+        <span class="val" id="ct-bias-val" style="min-width:3rem">0</span>
+        <button class="btn-off" style="padding:.15rem .4rem;font-size:.75rem;margin-left:.3rem"
+                onclick="document.getElementById('ct-bias-inp').value=0;document.getElementById('ct-bias-val').textContent='0'">0</button>
+      </div>
       <button class="btn-off" style="margin-top:.6rem" onclick="saveNodeConfig()">Save</button>
     </div>
 
@@ -945,15 +957,30 @@
         if (!r.ok) return;
         const s = await r.json();
         document.getElementById('num-leds-inp').value = s.num_leds;
+        const mb = s.max_bright ?? 255;
+        document.getElementById('max-bright-inp').value = mb;
+        document.getElementById('max-bright-val').textContent = mb;
+        const ct = s.ct_bias ?? 0;
+        document.getElementById('ct-bias-inp').value = ct;
+        document.getElementById('ct-bias-val').textContent = ct;
       } catch (e) { console.warn('node_config fetch failed', e); }
     }
 
+    document.getElementById('max-bright-inp').addEventListener('input', e => {
+      document.getElementById('max-bright-val').textContent = e.target.value;
+    });
+    document.getElementById('ct-bias-inp').addEventListener('input', e => {
+      document.getElementById('ct-bias-val').textContent = e.target.value;
+    });
+
     async function saveNodeConfig() {
-      const n = document.getElementById('num-leds-inp').value;
+      const n  = document.getElementById('num-leds-inp').value;
+      const mb = document.getElementById('max-bright-inp').value;
+      const ct = document.getElementById('ct-bias-inp').value;
       await fetch('/node_config', {
         method: 'POST',
         headers: {'Content-Type': 'application/x-www-form-urlencoded'},
-        body: 'num_leds=' + n,
+        body: 'num_leds=' + n + '&max_bright=' + mb + '&ct_bias=' + ct,
       });
     }
 

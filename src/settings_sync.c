@@ -2,6 +2,7 @@
 #include "discovery.h"
 #include "time_sync.h"
 #include "config.h"
+#include "node_config.h"
 #include "pixel_layout.h"
 #include "perlin.h"
 
@@ -311,6 +312,17 @@ static void palette_lookup(float t, const uint32_t *colors, const uint8_t *posit
     *b = (uint8_t)(( picked        & 0xFF) * bright_scale);
 }
 
+// Apply per-device color temperature bias to a single RGB triplet.
+// ct > 0 (warm): dim blue; ct < 0 (cool): dim red.
+// Scale factor 0.0025 per unit → ct=±100 gives ≤25% channel dimming.
+static inline void apply_ct(uint8_t *r, uint8_t *b) {
+    int8_t ct = node_config_get_ct_bias();
+    if (ct > 0)
+        *b = (uint8_t)(*b * (1.0f - ct * 0.0025f));
+    else if (ct < 0)
+        *r = (uint8_t)(*r * (1.0f + ct * 0.0025f)); // ct negative, so this dims
+}
+
 static void flash_task(void *arg) {
     for (;;) {
         settings_t cur;
@@ -318,7 +330,8 @@ static void flash_task(void *arg) {
 
         if (cur.mode == MODE_PERLIN || cur.mode == MODE_SINE) {
             float time_s      = (float)(time_sync_get_ms()) * 0.001f;
-            float bright_scale = cur.pal_bright / 255.0f;
+            float max_bright_scale = node_config_get_max_bright() / 255.0f;
+            float bright_scale = (cur.pal_bright / 255.0f) * max_bright_scale;
             int   n_leds       = pixel_layout_count();
             if (n_leds > MAX_LEDS) n_leds = MAX_LEDS;
 
@@ -359,6 +372,8 @@ static void flash_task(void *arg) {
                                &s_pattern_buf[i*3+1],
                                &s_pattern_buf[i*3+2]);
             }
+            for (int i = 0; i < n_leds; i++)
+                apply_ct(&s_pattern_buf[i*3+0], &s_pattern_buf[i*3+2]);
             led_write_rgb(s_pattern_buf, n_leds);
         } else {
             if (cur.flash_enabled) {
@@ -366,7 +381,12 @@ static void flash_task(void *arg) {
                 uint32_t phase = (uint32_t)(ms % cur.period_ms);
                 uint32_t on_time = (uint32_t)((uint64_t)cur.period_ms * cur.duty_percent / 100);
                 bool on = (phase < on_time);
-                led_set_rgb(cur.r, cur.g, cur.b);
+                float mb = node_config_get_max_bright() / 255.0f;
+                uint8_t fr = (uint8_t)(cur.r * mb);
+                uint8_t fg = (uint8_t)(cur.g * mb);
+                uint8_t fb = (uint8_t)(cur.b * mb);
+                apply_ct(&fr, &fb);
+                led_set_rgb(fr, fg, fb);
                 led_set(on);
             } else {
                 led_set(false);

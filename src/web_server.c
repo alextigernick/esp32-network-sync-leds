@@ -219,6 +219,9 @@ static esp_err_t handle_led_post(httpd_req_t *req) {
 // ---- /ota POST ---------------------------------------------------------
 
 static esp_err_t handle_ota_post(httpd_req_t *req) {
+    // Turn off LEDs before flash write to reduce power draw and avoid glitches.
+    web_led_set(false);
+
     esp_ota_handle_t ota_handle;
     const esp_partition_t *update_part = esp_ota_get_next_update_partition(NULL);
     if (!update_part) {
@@ -373,8 +376,10 @@ static esp_err_t handle_settings_post(httpd_req_t *req) {
 // ---- /node_config GET --------------------------------------------------
 
 static esp_err_t handle_node_config_get(httpd_req_t *req) {
-    static char buf[32];
-    int len = snprintf(buf, sizeof(buf), "{\"num_leds\":%u}", node_config_get_num_leds());
+    static char buf[64];
+    int len = snprintf(buf, sizeof(buf), "{\"num_leds\":%u,\"max_bright\":%u,\"ct_bias\":%d}",
+                       node_config_get_num_leds(), node_config_get_max_bright(),
+                       (int)node_config_get_ct_bias());
     httpd_resp_set_type(req, "application/json");
     httpd_resp_send(req, buf, len);
     return ESP_OK;
@@ -383,19 +388,31 @@ static esp_err_t handle_node_config_get(httpd_req_t *req) {
 // ---- /node_config POST -------------------------------------------------
 
 static esp_err_t handle_node_config_post(httpd_req_t *req) {
-    char body[32] = {0};
+    char body[64] = {0};
     int recv_len = req->content_len < (int)sizeof(body) - 1
                    ? req->content_len : (int)sizeof(body) - 1;
     if (recv_len > 0) httpd_req_recv(req, body, recv_len);
 
     char *p = strstr(body, "num_leds=");
-    if (!p) {
-        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing num_leds");
+    if (p) {
+        uint16_t n = (uint16_t)strtoul(p + 9, NULL, 10);
+        node_config_save_num_leds(n);
+        led_set_count(node_config_get_num_leds()); // apply immediately (clamped)
+    }
+    p = strstr(body, "max_bright=");
+    if (p) {
+        uint8_t v = (uint8_t)strtoul(p + 11, NULL, 10);
+        node_config_save_max_bright(v);
+    }
+    p = strstr(body, "ct_bias=");
+    if (p) {
+        int8_t v = (int8_t)strtol(p + 8, NULL, 10);
+        node_config_save_ct_bias(v);
+    }
+    if (!strstr(body, "num_leds=") && !strstr(body, "max_bright=") && !strstr(body, "ct_bias=")) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing node config field");
         return ESP_FAIL;
     }
-    uint16_t n = (uint16_t)strtoul(p + 9, NULL, 10);
-    node_config_save_num_leds(n);
-    led_set_count(node_config_get_num_leds()); // apply immediately (clamped)
 
     httpd_resp_set_status(req, "204 No Content");
     httpd_resp_send(req, NULL, 0);
