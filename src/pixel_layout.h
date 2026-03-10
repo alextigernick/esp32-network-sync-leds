@@ -1,18 +1,19 @@
 #pragma once
 
+#include <stdint.h>
 #include <stdbool.h>
 #include "esp_err.h"
 
 typedef struct {
-    float x;
-    float y;
+    int16_t x;  // position in 0.1 mm
+    int16_t y;
 } pixel_pos_t;
 
 // Parse /spiffs/pixel_layout.csv into memory. Call after SPIFFS is mounted.
 void pixel_layout_load(void);
 
-// Look up position for LED index. Returns false if not defined.
-bool pixel_layout_get(int idx, float *x, float *y);
+// Look up position for LED index in 0.1 mm units. Returns false if not defined.
+bool pixel_layout_get(int idx, int16_t *x, int16_t *y);
 
 // Number of positions loaded (highest defined index + 1).
 int pixel_layout_count(void);

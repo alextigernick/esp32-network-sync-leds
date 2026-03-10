@@ -35,15 +35,16 @@ void pixel_layout_load(void) {
         if (end == p || *end != ',') continue;
         p = end + 1;
 
-        float x = strtof(p, &end);
+        float xf = strtof(p, &end);
         if (end == p || *end != ',') continue;
         p = end + 1;
 
-        float y = strtof(p, NULL);
+        float yf = strtof(p, NULL);
 
         if (idx >= 0 && idx < MAX_LEDS) {
-            s_pos[idx].x  = x;
-            s_pos[idx].y  = y;
+            // Store as 0.1 mm units (round to nearest)
+            s_pos[idx].x  = (int16_t)(xf * 10.0f + (xf >= 0 ? 0.5f : -0.5f));
+            s_pos[idx].y  = (int16_t)(yf * 10.0f + (yf >= 0 ? 0.5f : -0.5f));
             s_valid[idx]  = true;
             if (idx + 1 > s_count) s_count = idx + 1;
             loaded++;
@@ -53,7 +54,7 @@ void pixel_layout_load(void) {
     ESP_LOGI(TAG, "loaded %d positions (s_count=%d)", loaded, s_count);
 }
 
-bool pixel_layout_get(int idx, float *x, float *y) {
+bool pixel_layout_get(int idx, int16_t *x, int16_t *y) {
     if (idx < 0 || idx >= MAX_LEDS || !s_valid[idx]) return false;
     *x = s_pos[idx].x;
     *y = s_pos[idx].y;

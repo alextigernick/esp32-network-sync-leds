@@ -1,9 +1,8 @@
-// Pure-C port of the fixed-point Perlin noise from perlin-fast.h
-// (https://www.kasperkamperman.com/blog/arduino/perlin-noise-improved-noise-on-arduino/)
+// Pure fixed-point Perlin noise — no floating point anywhere.
 //
-// The algorithm works in a 16.16 fixed-point space: the upper 16 bits are
-// the integer lattice coordinate and the lower 16 bits are the fractional
-// interpolation weight.
+// The noise lattice works in 16.16 fixed-point space (N = 1<<16).
+// Pixel coordinates arrive in 0.1 mm units and are scaled to lattice space
+// by dividing by scale_t (also in 0.1 mm), so scale_t controls feature size.
 
 #include "perlin.h"
 #include <stdint.h>
@@ -31,8 +30,8 @@ static const uint8_t s_perm[256] = {
     222,114, 67, 29, 24, 72,243,141,128,195, 78, 66,215, 61,156,180,
 };
 
-// Smooth fade table: fade[i] = (int)((1<<12) * f(i/256))  where f is the
-// quintic smoothstep  6t^5 - 15t^4 + 10t^3
+// Quintic smoothstep fade table: fade[i] = round((1<<12) * f(i/256))
+// f(t) = 6t^5 - 15t^4 + 10t^3
 static const uint16_t s_fade[256] = {
        0,    0,    0,    0,    0,    0,    0,    0,    1,    1,    2,    3,
        3,    4,    6,    7,    9,   10,   12,   14,   17,   19,   22,   25,
@@ -64,7 +63,6 @@ static const uint16_t s_fade[256] = {
 
 #define N  (1L << 16)
 #define P(x) s_perm[(x) & 255]
-#define FADE_LOOKUP(t) s_fade[(t) >> 8]
 
 static long fp_lerp(long t, long a, long b) { return a + (t * (b - a) >> 12); }
 
@@ -84,7 +82,7 @@ static long fp_grad(long hash, long x, long y, long z) {
 }
 
 // Raw 3D Perlin noise in 16.16 fixed-point space.
-// Returns a signed value roughly in the range ±(N/2).
+// Returns a signed value roughly in the range ±40000.
 static long inoise(uint32_t x, uint32_t y, uint32_t z) {
     long X = (x >> 16) & 255, Y = (y >> 16) & 255, Z = (z >> 16) & 255;
     long fx = (long)(x & (N - 1));
@@ -109,42 +107,56 @@ static long inoise(uint32_t x, uint32_t y, uint32_t z) {
 }
 
 // ---------------------------------------------------------------------------
-// Public API — fractal Brownian motion (fBm)
+// Public API — fractal Brownian motion (fBm), fully integer
 // ---------------------------------------------------------------------------
 //
-// Single-octave inoise() has output roughly in [-INOISE_MAX, +INOISE_MAX].
-// Empirically the Kasperkamperman implementation reaches about ±40000.
-// We normalise by the known fBm amplitude sum so the output is deterministic
-// and consistent across all nodes regardless of octave count.
+// fBm amplitude sum for n octaves (Q8, 256 = 1.0):
+//   n=1: 256   n=2: 384   n=3: 448   n=4: 480
+//   n=5: 496   n=6: 504   n=7: 508   n=8: 510
+//
+// inoise() raw output: ±~40000.  After Q8 accumulation:
+//   value_max ≈ 40000 * amp_sum_q8 / 256
+// Normalise to [0,255]:
+//   result = (value * 128 / value_max) + 128
 
-#define INOISE_MAX 40000.0f
-
-uint8_t perlin_sample(float x_mm, float y_mm, float time_s,
-                      float scale_mm, float speed, int octaves) {
+uint8_t perlin_sample(int16_t x_t, int16_t y_t, uint32_t time_ms,
+                      int16_t scale_t, uint16_t speed_c100, int octaves) {
     if (octaves < 1) octaves = 1;
     if (octaves > 8) octaves = 8;
+    if (scale_t <= 0) scale_t = 1;
 
-    float inv  = 1.0f / scale_mm;
-    float amp  = 1.0f;
-    float freq = 1.0f;
-    float value    = 0.0f;
-    float amp_sum  = 0.0f;
+    int32_t value     = 0;
+    int32_t amp_q8    = 256;  // 1.0 in Q8
+    int32_t amp_sum_q8 = 0;
 
-    for (int i = 0; i < octaves; i++) {
-        uint32_t nx = (uint32_t)(x_mm   * freq * inv   * (float)N);
-        uint32_t ny = (uint32_t)(y_mm   * freq * inv   * (float)N);
-        uint32_t nz = (uint32_t)(time_s * speed * freq * (float)N);
-        // inoise raw → float in [-1, 1]
-        float raw = (float)inoise(nx, ny, nz) / INOISE_MAX;
-        value   += raw * amp;
-        amp_sum += amp;
-        amp  *= 0.5f;
-        freq *= 2.0f;
+    for (int oct = 0; oct < octaves; oct++) {
+        int freq = 1 << oct;  // 1, 2, 4, 8, ...
+
+        // nx = x_t * freq * N / scale_t  (all in 16.16 lattice space)
+        // Negative x_t casts correctly to uint32_t for lattice wrapping.
+        uint32_t nx = (uint32_t)((int64_t)x_t * freq * N / scale_t);
+        uint32_t ny = (uint32_t)((int64_t)y_t * freq * N / scale_t);
+
+        // nz = time_ms * speed_c100 * freq / 400000  (noise-units/s mapping)
+        // Original float formula: nz = time_s * (speed_c100/400) * freq * N
+        // Equivalent: time_ms * speed_c100 * freq * N / 400000
+        // Split integer/fractional to keep result in uint32_t without overflow:
+        //   tc = time_ms * speed_c100 * freq  (fits uint64_t for sane values)
+        //   nz = (tc / 400000) << 16  |  (tc % 400000) * 65536 / 400000
+        uint64_t tc  = (uint64_t)(uint32_t)time_ms * speed_c100 * (uint32_t)freq;
+        uint32_t nz  = ((uint32_t)(tc / 400000) << 16)
+                     | (uint32_t)((tc % 400000) * 65536 / 400000);
+
+        int32_t raw = (int32_t)inoise(nx, ny, nz);
+        value      += (raw * amp_q8) >> 8;
+        amp_sum_q8 += amp_q8;
+        amp_q8    >>= 1;
     }
 
-    // value ∈ [-amp_sum, +amp_sum]; map to [0, 1] then [0, 255]
-    float normalized = (value / amp_sum + 1.0f) * 0.5f;
-    if (normalized < 0.0f) normalized = 0.0f;
-    if (normalized > 1.0f) normalized = 1.0f;
-    return (uint8_t)(normalized * 255.0f);
+    // value range: ±(40000 * amp_sum_q8 / 256)
+    int32_t max_val = (int32_t)((int64_t)40000 * amp_sum_q8 / 256);
+    int32_t result  = (int32_t)((int64_t)value * 128 / max_val) + 128;
+    if (result <   0) result =   0;
+    if (result > 255) result = 255;
+    return (uint8_t)result;
 }
