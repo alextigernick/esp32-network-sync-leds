@@ -351,7 +351,8 @@ static void flash_task(void *arg) {
         if (s_identify_until_ms && now_ms < s_identify_until_ms) {
             int n = node_config_get_num_leds();
             if (n > MAX_LEDS) n = MAX_LEDS;
-            memset(s_pattern_buf, 0xFF, n * 3);
+            uint8_t id_bright = node_config_get_max_bright();
+            memset(s_pattern_buf, id_bright, n * 3);
             led_write_rgb(s_pattern_buf, n);
             vTaskDelay(pdMS_TO_TICKS(10));
             continue;
