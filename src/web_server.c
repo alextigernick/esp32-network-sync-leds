@@ -233,8 +233,9 @@ static esp_err_t handle_led_post(httpd_req_t *req) {
 // ---- /ota POST ---------------------------------------------------------
 
 static esp_err_t handle_ota_post(httpd_req_t *req) {
-    // Turn off LEDs before flash write to reduce power draw and avoid glitches.
-    web_led_set(false);
+    // Blank LEDs for the entire OTA write to reduce power draw and avoid glitches.
+    // flash_task would otherwise keep overwriting any single-frame blackout.
+    settings_ota_blackout(true);
 
     esp_ota_handle_t ota_handle;
     const esp_partition_t *update_part = esp_ota_get_next_update_partition(NULL);

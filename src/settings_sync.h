@@ -65,6 +65,9 @@ void settings_encode(const settings_t *s, char *buf, int buf_size);
 // Returns true on success.  Call once on STA boot before starting tasks.
 bool settings_fetch_from_peer(const char *peer_ip);
 
+// Blank all LEDs and pause rendering (use during OTA to avoid glitches/power spikes).
+void settings_ota_blackout(bool enable);
+
 // Start the LED flash task.  Call once after GPIO is configured.
 void settings_start_flash_task(void);
 

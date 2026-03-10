@@ -91,6 +91,7 @@ static const int16_t s_sin_q15[256] = {
 static volatile uint64_t s_identify_until_ms = 0;
 static volatile uint32_t s_frame_count       = 0;
 static volatile uint32_t s_flash_stack_hwm   = 0;
+static volatile bool     s_ota_blackout      = false;
 
 // Profiling: rolling average of per-frame render time (µs), split by section
 static volatile uint32_t s_prof_perloop_us   = 0; // per-pixel loop (noise/sine eval)
@@ -433,6 +434,16 @@ static void flash_task(void *arg) {
         if ((s_frame_count & 0x3F) == 0)  // every 64 frames (~1280 ms at 50 Hz)
             s_flash_stack_hwm = uxTaskGetStackHighWaterMark(NULL);
 
+        // OTA in progress: blank the strip and do nothing else this frame
+        if (s_ota_blackout) {
+            int n = node_config_get_num_leds();
+            if (n > MAX_LEDS) n = MAX_LEDS;
+            memset(s_pattern_buf, 0, n * 3);
+            led_write_rgb(s_pattern_buf, n);
+            vTaskDelayUntil(&wake, pdMS_TO_TICKS(20));
+            continue;
+        }
+
         // Identify mode: override all LEDs with full white for duration
         uint64_t now_ms = (uint64_t)(esp_timer_get_time() / 1000);
         if (s_identify_until_ms && now_ms < s_identify_until_ms) {
@@ -612,6 +623,10 @@ bool settings_fetch_from_peer(const char *peer_ip) {
     settings_apply_local(&fetched);
     ESP_LOGI(TAG, "boot-fetched settings from %s", peer_ip);
     return true;
+}
+
+void settings_ota_blackout(bool enable) {
+    s_ota_blackout = enable;
 }
 
 void settings_start_flash_task(void) {
