@@ -21,6 +21,9 @@
 #include "esp_netif.h"
 #include "nvs_flash.h"
 #include "esp_spiffs.h"
+#include "esp_mac.h"
+#include "esp_timer.h"
+#include "esp_random.h"
 
 #define TAG "main"
 
@@ -32,7 +35,14 @@ static char s_my_ip[16]   = {0};
 static char s_my_name[32] = {0};
 
 // Track connection attempts to detect when no AP is available
-static int s_connect_attempts = 0;
+static int s_connect_attempts     = 0;
+static int s_max_connect_attempts = WIFI_MAX_CONNECT_ATTEMPTS; // overridden per-node from MAC
+
+static esp_timer_handle_t s_retry_timer = NULL;
+
+static void retry_timer_cb(void *arg) {
+    esp_wifi_connect();
+}
 
 // ---- WiFi event handler ------------------------------------------------
 
@@ -43,8 +53,13 @@ static void wifi_event_handler(void *arg, esp_event_base_t base,
 
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
         s_connect_attempts++;
-        if (s_connect_attempts < WIFI_MAX_CONNECT_ATTEMPTS) {
-            esp_wifi_connect();
+        if (s_connect_attempts < s_max_connect_attempts) {
+            // Random inter-retry delay (500–2500 ms) so two nodes with the
+            // same retry budget diverge and don't both become the AP.
+            uint32_t delay_ms = WIFI_RETRY_DELAY_MIN_MS + (esp_random() % (WIFI_RETRY_DELAY_MAX_MS - WIFI_RETRY_DELAY_MIN_MS));
+            ESP_LOGI(TAG, "Retry %d/%d in %lu ms", s_connect_attempts,
+                     s_max_connect_attempts, delay_ms);
+            esp_timer_start_once(s_retry_timer, (uint64_t)delay_ms * 1000);
         } else {
             ESP_LOGW(TAG, "No AP found after %d attempts", s_connect_attempts);
             xEventGroupSetBits(s_wifi_events, WIFI_FAIL_BIT);
@@ -168,6 +183,23 @@ void app_main(void) {
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
     s_wifi_events = xEventGroupCreate();
+
+    esp_timer_create_args_t retry_timer_args = {
+        .callback = retry_timer_cb,
+        .name     = "wifi_retry",
+    };
+    ESP_ERROR_CHECK(esp_timer_create(&retry_timer_args, &s_retry_timer));
+
+    // Give each node a MAC-derived STA retry budget (2–9 attempts).
+    // The node with the fewest retries fails STA first and becomes the AP;
+    // others keep scanning and find it before exhausting their budget.
+    // No boot delay — nodes start immediately and desync through retry timing.
+    {
+        uint8_t mac[6];
+        esp_read_mac(mac, ESP_MAC_WIFI_STA);
+        s_max_connect_attempts = WIFI_RETRY_MIN + (int)(((uint32_t)mac[4] * 251 + mac[5]) % WIFI_RETRY_SPREAD);
+        ESP_LOGI(TAG, "STA retry budget: %d attempts", s_max_connect_attempts);
+    }
 
     bool is_sta = wifi_connect_or_become_ap();
 

@@ -23,8 +23,16 @@
 // UDP port for time sync
 #define TIME_SYNC_PORT  5001
 
-// How many STA connection attempts before giving up and becoming the AP
-#define WIFI_MAX_CONNECT_ATTEMPTS  2
+// Per-node STA retry budget is MAC-derived in range [MIN, MIN+SPREAD).
+// The node with the fewest retries fails first and becomes the AP;
+// others keep scanning and find it before exhausting their budget.
+#define WIFI_RETRY_MIN        2
+#define WIFI_RETRY_SPREAD     8    // budget = MIN + (mac_hash % SPREAD) → 2–9 attempts
+#define WIFI_RETRY_DELAY_MIN_MS   0
+#define WIFI_RETRY_DELAY_MAX_MS  1100  // random delay per retry in [MIN, MAX)
+
+// Fallback used only if MAC read fails before WiFi init
+#define WIFI_MAX_CONNECT_ATTEMPTS  (WIFI_RETRY_MIN + WIFI_RETRY_SPREAD - 1)
 
 // How often each node announces itself (ms)
 #define DISCOVERY_INTERVAL_MS  3000
