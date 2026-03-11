@@ -44,12 +44,10 @@ void pixel_layout_load(void) {
         float yf = strtof(p, NULL);
 
         if (idx >= 0 && idx < MAX_LEDS) {
-            // Apply layout transform: translate then rotate around origin
-            float tx  = xf + node_config_get_layout_x_offset();
-            float ty  = yf + node_config_get_layout_y_offset();
+            // Apply layout transform: rotate around local origin, then translate
             float rot = node_config_get_layout_rotation() * (float)M_PI / 180.0f;
-            float rx  = tx * cosf(rot) - ty * sinf(rot);
-            float ry  = tx * sinf(rot) + ty * cosf(rot);
+            float rx  = xf * cosf(rot) - yf * sinf(rot) + node_config_get_layout_x_offset();
+            float ry  = xf * sinf(rot) + yf * cosf(rot) + node_config_get_layout_y_offset();
 
             // Store as 0.1 mm units (round to nearest)
             s_pos[idx].x  = (int16_t)(rx * 10.0f + (rx >= 0 ? 0.5f : -0.5f));
