@@ -6,3 +6,6 @@ set(COMPONENT_REQUIRES spiffs)
 register_component()
 
 target_add_binary_data(${COMPONENT_TARGET} "web_ui.html" TEXT)
+target_add_binary_data(${COMPONENT_TARGET} "calibrate.html" TEXT)
+target_add_binary_data(${COMPONENT_TARGET} "server.crt" TEXT)
+target_add_binary_data(${COMPONENT_TARGET} "server.key" TEXT)

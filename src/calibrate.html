@@ -1,0 +1,1240 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>LED Spatial Calibration</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      font-family: monospace;
+      background: #0a0a0a;
+      color: #ccc;
+      margin: 0;
+      padding: 1rem;
+    }
+    h1 { color: #0f9; margin: 0 0 .5rem; font-size: 1.3rem; }
+    h2 { color: #fa0; font-size: 1rem; margin: 1.2rem 0 .4rem; border-bottom: 1px solid #333; padding-bottom: .2rem; }
+    h3 { color: #88f; font-size: .85rem; margin: .8rem 0 .2rem; }
+    .row { display: flex; flex-wrap: wrap; gap: .8rem; align-items: flex-start; }
+    .col { display: flex; flex-direction: column; gap: .5rem; }
+    button {
+      padding: .4rem .8rem;
+      background: #1e3a1e;
+      color: #0f9;
+      border: 1px solid #0f9;
+      border-radius: 4px;
+      cursor: pointer;
+      font-family: monospace;
+      font-size: .85rem;
+    }
+    button:hover { background: #0f91; }
+    button:disabled { opacity: .4; cursor: default; }
+    button.warn { background: #3a1e00; color: #fa0; border-color: #fa0; }
+    button.danger { background: #3a0000; color: #f44; border-color: #f44; }
+    input[type=number], input[type=text] {
+      background: #1a1a1a;
+      border: 1px solid #444;
+      color: #eee;
+      padding: .3rem .5rem;
+      border-radius: 4px;
+      font-family: monospace;
+      font-size: .85rem;
+      width: 80px;
+    }
+    label { font-size: .8rem; color: #888; }
+    .card {
+      background: #111;
+      border: 1px solid #2a2a2a;
+      border-radius: 6px;
+      padding: .8rem 1rem;
+    }
+    canvas { border: 1px solid #333; background: #000; display: block; }
+    canvas.highlight { border-color: #0f9; }
+    video { border: 1px solid #444; display: block; }
+    #log {
+      background: #050505;
+      border: 1px solid #222;
+      border-radius: 4px;
+      padding: .5rem;
+      font-size: .75rem;
+      height: 160px;
+      overflow-y: auto;
+      color: #aaa;
+      white-space: pre-wrap;
+    }
+    .log-ok   { color: #0f9; }
+    .log-warn { color: #fa0; }
+    .log-err  { color: #f44; }
+    table { border-collapse: collapse; font-size: .8rem; width: 100%; }
+    th { background: #1a1a1a; color: #888; padding: .3rem .6rem; text-align: left; border-bottom: 1px solid #333; }
+    td { padding: .25rem .6rem; border-bottom: 1px solid #1a1a1a; }
+    td.ok   { color: #0f9; }
+    td.warn { color: #fa0; }
+    td.err  { color: #f44; }
+    .badge {
+      display: inline-block;
+      padding: .1rem .4rem;
+      border-radius: 3px;
+      font-size: .75rem;
+    }
+    .badge.green { background: #0f91; color: #0f9; }
+    .badge.red   { background: #f441; color: #f44; }
+    .badge.gray  { background: #3331; color: #888; }
+    progress { width: 100%; height: 8px; }
+    .param-row { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
+    #device-list { display: flex; flex-direction: column; gap: .3rem; }
+    .device-entry {
+      display: flex;
+      align-items: center;
+      gap: .5rem;
+      padding: .3rem .5rem;
+      background: #151515;
+      border-radius: 4px;
+      border: 1px solid #222;
+      font-size: .8rem;
+    }
+    .device-entry input[type=checkbox] { width: auto; }
+    .status-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      display: inline-block;
+    }
+    .dot-idle    { background: #555; }
+    .dot-scan    { background: #fa0; animation: pulse .5s infinite alternate; }
+    .dot-done    { background: #0f9; }
+    .dot-err     { background: #f44; }
+    @keyframes pulse { to { opacity: .3; } }
+    .canvas-label { font-size: .7rem; color: #666; margin-bottom: .1rem; }
+    #overlay-canvas-container { position: relative; display: inline-block; }
+  </style>
+</head>
+<body>
+<h1>&#x25A3; LED Spatial Calibration</h1>
+<p style="color:#666;font-size:.8rem;margin:.2rem 0 .5rem">
+  Camera-based multi-panel spatial alignment. Detects each LED position in camera pixels,
+  fits a similarity transform per device, computes relative offsets and rotations.
+</p>
+
+<!-- Secure context warning — shown only if not on HTTPS -->
+<div id="insecure-warning" style="display:none;background:#2a1000;border:1px solid #f80;border-radius:6px;padding:.8rem 1rem;margin-bottom:1rem;font-size:.82rem;line-height:1.7">
+  <strong style="color:#f80">&#x26A0; Camera blocked: not on HTTPS.</strong><br>
+  This page should be loaded over HTTPS so the browser allows camera access.
+  The ESP32 serves HTTPS on port 443 with a self-signed certificate.<br><br>
+  <strong style="color:#fa0">Go to:</strong>
+  <code id="warn-https-url" style="background:#111;padding:.15rem .4rem;border-radius:3px;user-select:all"></code>
+  and accept the certificate warning once ("Advanced → Accept the Risk and Continue" in Firefox,
+  or "Advanced → Proceed" in Chrome). Camera will work after that.<br><br>
+  <em style="color:#666">The cert is self-signed for 192.168.4.1 (the AP). Always use the AP IP for calibration.</em>
+</div>
+
+<!-- ===== SETUP ===== -->
+<div class="card">
+<h2>1. Setup</h2>
+<div class="row">
+  <div class="col">
+    <label>This device IP</label>
+    <input type="text" id="self-ip" value="" style="width:160px">
+    <button onclick="discoverPeers()">Discover Peers</button>
+  </div>
+  <div class="col" style="flex:1;min-width:260px">
+    <label>Devices (check all to calibrate)</label>
+    <div id="device-list"><em style="color:#555;font-size:.8rem">Click Discover Peers...</em></div>
+  </div>
+</div>
+</div>
+
+<!-- ===== CAMERA ===== -->
+<div class="card">
+<h2>2. Camera</h2>
+<div class="row">
+  <div class="col">
+    <div class="param-row">
+      <label>Width</label>
+      <input type="number" id="cam-w" value="1280" style="width:70px">
+      <label>Height</label>
+      <input type="number" id="cam-h" value="720" style="width:70px">
+    </div>
+    <div class="param-row">
+      <label>Capture delay (ms)</label>
+      <input type="number" id="cap-delay" value="250" style="width:70px">
+      <label>Blob threshold</label>
+      <input type="number" id="blob-thresh" value="20" style="width:60px">
+    </div>
+    <div class="param-row">
+      <label>Blob % of max</label>
+      <input type="number" id="blob-pct" value="30" style="width:60px">
+      <label>Skip dark blobs &lt;</label>
+      <input type="number" id="min-blob-bright" value="60" style="width:60px">
+    </div>
+    <button onclick="startCamera()">Start Camera</button>
+    <button onclick="stopCamera()">Stop Camera</button>
+  </div>
+  <div class="col">
+    <div class="canvas-label">Live feed (downscaled preview)</div>
+    <video id="cam-video" autoplay muted playsinline width="320" height="180"></video>
+  </div>
+</div>
+</div>
+
+<!-- ===== BACKGROUND ===== -->
+<div class="card">
+<h2>3. Background</h2>
+<div class="row">
+  <div class="col">
+    <p style="font-size:.8rem;color:#888;margin:0">
+      Turn off ALL LEDs on all devices, then capture the background frame.
+    </p>
+    <button onclick="allLedsOff()" class="warn">Turn Off All LEDs</button>
+    <button onclick="captureBackground()">Capture Background Frame</button>
+    <span id="bg-status" style="font-size:.8rem;color:#666">No background captured</span>
+  </div>
+  <div class="col">
+    <div class="canvas-label">Background frame</div>
+    <canvas id="bg-canvas" width="320" height="180"></canvas>
+  </div>
+</div>
+</div>
+
+<!-- ===== SCAN ===== -->
+<div class="card">
+<h2>4. Scan Devices</h2>
+<div class="row">
+  <div class="col">
+    <p style="font-size:.8rem;color:#888;margin:0">
+      Lights each LED one at a time, photographs it, and records its camera position.
+    </p>
+    <div class="param-row">
+      <label>Max LEDs per device (0=all)</label>
+      <input type="number" id="max-leds" value="0" style="width:60px">
+    </div>
+    <button onclick="scanAll()">Scan All Devices</button>
+    <button onclick="abortScan()" class="danger" id="abort-btn" disabled>Abort</button>
+    <div id="scan-progress-container" style="margin-top:.5rem;display:none">
+      <div id="scan-progress-label" style="font-size:.75rem;color:#888"></div>
+      <progress id="scan-progress" value="0" max="1"></progress>
+    </div>
+  </div>
+  <div class="col">
+    <div class="canvas-label">Latest diff frame (bg subtracted)</div>
+    <canvas id="diff-canvas" width="320" height="180"></canvas>
+  </div>
+  <div class="col">
+    <div class="canvas-label">Detected blob (full res coords, scaled down)</div>
+    <canvas id="blob-canvas" width="320" height="180"></canvas>
+  </div>
+</div>
+</div>
+
+<!-- ===== ANALYSIS ===== -->
+<div class="card">
+<h2>5. Analysis</h2>
+<button onclick="analyzeResults()">Compute Calibration</button>
+<span style="font-size:.75rem;color:#555;margin-left:.5rem">(run after scanning all devices)</span>
+
+<h3>Pixel-to-mm scale comparison</h3>
+<div id="scale-table-container"><em style="color:#555;font-size:.8rem">No data yet</em></div>
+
+<h3>Calibration results (transforms to upload)</h3>
+<div id="calib-table-container"><em style="color:#555;font-size:.8rem">No data yet</em></div>
+
+<h3>Fit residuals</h3>
+<div id="residuals-container" style="font-size:.8rem;color:#888">No data yet</div>
+</div>
+
+<!-- ===== DEBUG CANVASES ===== -->
+<div class="card">
+<h2>6. Debug Visualizations</h2>
+<p style="font-size:.8rem;color:#666;margin:0 0 .5rem">
+  All detected LED positions overlaid on the last captured frame.
+  Colors: each device gets a unique color. Circles = detected, X = local-mm layout origin.
+</p>
+<div class="row" id="debug-canvases">
+  <div>
+    <div class="canvas-label">All detected positions (camera space)</div>
+    <canvas id="overlay-canvas" width="640" height="360"></canvas>
+  </div>
+  <div>
+    <div class="canvas-label">World mm space (after calibration)</div>
+    <canvas id="world-canvas" width="640" height="480"></canvas>
+  </div>
+</div>
+<div id="per-device-canvases" class="row" style="margin-top:.8rem"></div>
+</div>
+
+<!-- ===== UPLOAD ===== -->
+<div class="card">
+<h2>7. Upload Calibration</h2>
+<div class="row">
+  <div class="col">
+    <p style="font-size:.8rem;color:#888;margin:0">
+      Uploads computed layout_x, layout_y, layout_rot to each device's /node_config.
+      Device 0 (reference) gets 0, 0, 0.
+    </p>
+    <button onclick="uploadCalibration()">Upload to All Devices</button>
+    <button onclick="resetAllTransforms()" class="warn">Reset All to 0,0,0</button>
+  </div>
+</div>
+</div>
+
+<!-- ===== LOG ===== -->
+<h2 style="margin-top:1.2rem">Log</h2>
+<div id="log"></div>
+
+<!-- hidden capture canvas (full resolution) -->
+<canvas id="cap-canvas" style="display:none"></canvas>
+
+<script>
+// ============================================================
+//  State
+// ============================================================
+let stream = null;
+let bgImageData = null;        // full-res background ImageData
+let scanAborted = false;
+
+// devices[i] = { ip, name, layout:[{idx,x,y}], detected:[{idx,cx,cy,brightness}|null] }
+let devices = [];
+
+// calibResults[i] = { ip, name, layout_x, layout_y, layout_rot, scale_px_mm, residual_rms }
+let calibResults = [];
+
+// Last captured overlay frame (full-res ImageData for overlay drawing)
+let lastFullFrame = null;
+
+// Unique colors per device index
+const DEVICE_COLORS = ['#ff4444','#44aaff','#ffcc00','#44ff88','#ff44cc','#88ffff','#ffaa44','#aa44ff'];
+
+// ============================================================
+//  Logging
+// ============================================================
+function log(msg, cls='') {
+  const el = document.getElementById('log');
+  const line = document.createElement('div');
+  if (cls) line.className = cls;
+  const ts = new Date().toISOString().slice(11,19);
+  line.textContent = `[${ts}] ${msg}`;
+  el.appendChild(line);
+  el.scrollTop = el.scrollHeight;
+}
+function logOk(m)   { log(m, 'log-ok'); }
+function logWarn(m) { log(m, 'log-warn'); }
+function logErr(m)  { log(m, 'log-err'); }
+
+// ============================================================
+//  Init
+// ============================================================
+window.addEventListener('load', () => {
+  document.getElementById('self-ip').value = window.location.hostname || '192.168.4.1';
+
+  // Camera requires a secure context. The ESP32 serves HTTPS on port 443;
+  // show a banner directing the user there if they landed on the HTTP version.
+  if (!window.isSecureContext) {
+    const httpsUrl = `https://${location.hostname}/calibrate`;
+    document.getElementById('insecure-warning').style.display = '';
+    document.getElementById('warn-https-url').textContent = httpsUrl;
+  }
+});
+
+// ============================================================
+//  API URL routing
+// ============================================================
+// All requests from the calibration page go through the HTTPS AP (self IP).
+// Requests to peer devices are forwarded via the /fwd/{peer_ip}{path} proxy
+// endpoint on the AP, so there are no mixed-content or cross-origin issues.
+function apiUrl(ip, path) {
+  const selfIp = document.getElementById('self-ip').value.trim();
+  if (ip === selfIp) {
+    // Same device — use relative path (works on both HTTP and HTTPS)
+    return path;
+  }
+  // Peer device — route through the AP proxy
+  return `/fwd/${ip}${path}`;
+}
+
+// ============================================================
+//  Device discovery
+// ============================================================
+async function discoverPeers() {
+  const selfIp = document.getElementById('self-ip').value.trim();
+  if (!selfIp) { logErr('No self IP set'); return; }
+
+  log(`Fetching state from ${selfIp}...`);
+  try {
+    const res = await fetch(apiUrl(selfIp, '/state'));
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const state = await res.json();
+
+    devices = [{ ip: selfIp, name: state.name || selfIp, layout: [], detected: [] }];
+    if (state.peers) {
+      for (const p of state.peers) {
+        devices.push({ ip: p.ip, name: p.name, layout: [], detected: [] });
+      }
+    }
+    renderDeviceList();
+    logOk(`Found ${devices.length} device(s): ${devices.map(d=>d.name).join(', ')}`);
+  } catch(e) {
+    logErr(`Discovery failed: ${e.message}`);
+  }
+}
+
+function renderDeviceList() {
+  const el = document.getElementById('device-list');
+  el.innerHTML = '';
+  devices.forEach((d, i) => {
+    const row = document.createElement('div');
+    row.className = 'device-entry';
+    row.id = `dev-entry-${i}`;
+    const color = DEVICE_COLORS[i % DEVICE_COLORS.length];
+    row.innerHTML = `
+      <input type="checkbox" id="dev-chk-${i}" checked>
+      <span class="status-dot dot-idle" id="dev-dot-${i}"></span>
+      <span style="color:${color};font-weight:bold">${d.name}</span>
+      <span style="color:#555">${d.ip}</span>
+      <span id="dev-status-${i}" style="font-size:.75rem;color:#555">idle</span>
+      <span id="dev-leds-${i}" style="font-size:.75rem;color:#444"></span>
+    `;
+    el.appendChild(row);
+  });
+}
+
+function isDeviceChecked(i) {
+  const chk = document.getElementById(`dev-chk-${i}`);
+  return chk ? chk.checked : true;
+}
+
+function setDeviceStatus(i, status, cls) {
+  const el = document.getElementById(`dev-status-${i}`);
+  const dot = document.getElementById(`dev-dot-${i}`);
+  if (el) { el.textContent = status; el.className = cls || ''; }
+  if (dot) {
+    dot.className = 'status-dot ' + (
+      cls === 'log-ok' ? 'dot-done' :
+      cls === 'log-err' ? 'dot-err' :
+      status === 'scanning' ? 'dot-scan' : 'dot-idle'
+    );
+  }
+}
+
+// ============================================================
+//  Camera
+// ============================================================
+async function startCamera() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    logErr('Camera API unavailable. This page must be accessed over HTTPS or from a browser ' +
+           'configured to allow camera on insecure origins. See the warning banner above.');
+    return;
+  }
+  try {
+    const w = parseInt(document.getElementById('cam-w').value) || 1280;
+    const h = parseInt(document.getElementById('cam-h').value) || 720;
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { width: { ideal: w }, height: { ideal: h }, facingMode: 'environment' },
+      audio: false
+    });
+    const video = document.getElementById('cam-video');
+    video.srcObject = stream;
+    await new Promise(r => video.onloadedmetadata = r);
+    // Set cap canvas to actual camera size
+    const capCanvas = document.getElementById('cap-canvas');
+    capCanvas.width  = video.videoWidth;
+    capCanvas.height = video.videoHeight;
+    // Hide the warning once camera works
+    document.getElementById('insecure-warning').style.display = 'none';
+    logOk(`Camera started: ${video.videoWidth}x${video.videoHeight}`);
+  } catch(e) {
+    if (e.name === 'NotAllowedError') {
+      logErr('Camera permission denied. Allow camera access in your browser and try again.');
+    } else if (e.name === 'NotFoundError') {
+      logErr('No camera found. Connect a camera and try again.');
+    } else {
+      logErr(`Camera error (${e.name}): ${e.message}`);
+    }
+  }
+}
+
+function stopCamera() {
+  if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+  document.getElementById('cam-video').srcObject = null;
+  log('Camera stopped');
+}
+
+async function captureFullRes() {
+  const video  = document.getElementById('cam-video');
+  const canvas = document.getElementById('cap-canvas');
+  // Wait for a genuinely new decoded frame from the camera before grabbing pixels.
+  // Without this, drawImage can return a stale cached frame — especially noticeable
+  // at short capture delays when the LED has just changed state.
+  if (video.requestVideoFrameCallback) {
+    await new Promise(r => video.requestVideoFrameCallback(r));
+  }
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+  return ctx.getImageData(0, 0, canvas.width, canvas.height);
+}
+
+function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// ============================================================
+//  Background capture
+// ============================================================
+async function captureBackground() {
+  if (!stream) { logErr('Camera not started'); return; }
+  bgImageData = await captureFullRes();
+  renderSmall(bgImageData, document.getElementById('bg-canvas'));
+  document.getElementById('bg-status').textContent =
+    `Captured ${bgImageData.width}x${bgImageData.height}`;
+  logOk('Background captured');
+}
+
+// ============================================================
+//  LED control
+// ============================================================
+async function postTo(ip, path, body) {
+  const res = await fetch(apiUrl(ip, path), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body
+  });
+  return res;
+}
+
+async function allLedsOff() {
+  log('Turning off all LEDs...');
+  // Post settings to self ONLY — mesh forwarding propagates flash=0 to all peers.
+  // r/g/b=255 so probe pixels will be bright white when lit individually later.
+  const selfIp = document.getElementById('self-ip').value.trim();
+  try {
+    await postTo(selfIp, '/settings', 'mode=0&flash=0&r=255&g=255&b=255');
+  } catch(e) {
+    logErr(`  settings propagation failed: ${e.message}`);
+  }
+  // led_pixel is device-local (not mesh-propagated), clear on each device individually.
+  for (const d of devices) {
+    try { await postTo(d.ip, '/led_pixel', 'idx=-1'); } catch(e) { /* best effort */ }
+  }
+  logOk('All LEDs off (flash=0 propagated via mesh, probe pixels cleared)');
+}
+
+// ============================================================
+//  Pixel layout fetch
+// ============================================================
+async function fetchPixelLayout(ip) {
+  const res = await fetch(apiUrl(ip, '/pixel_layout'));
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const csv = await res.text();
+  return parsePixelLayoutCSV(csv);
+}
+
+function parsePixelLayoutCSV(csv) {
+  const pts = [];
+  for (const line of csv.split('\n')) {
+    const t = line.trim();
+    if (!t || t.startsWith('#')) continue;
+    const parts = t.split(',');
+    if (parts.length < 3) continue;
+    const idx = parseInt(parts[0]);
+    const x   = parseFloat(parts[1]);
+    const y   = parseFloat(parts[2]);
+    if (!isNaN(idx) && !isNaN(x) && !isNaN(y)) pts.push({ idx, x, y });
+  }
+  return pts.sort((a,b) => a.idx - b.idx);
+}
+
+// ============================================================
+//  Blob detection
+// ============================================================
+function subtractBackground(frame, bg) {
+  const out = new Uint8ClampedArray(frame.data.length);
+  for (let i = 0; i < frame.data.length; i += 4) {
+    out[i]   = Math.max(0, frame.data[i]   - bg.data[i]);
+    out[i+1] = Math.max(0, frame.data[i+1] - bg.data[i+1]);
+    out[i+2] = Math.max(0, frame.data[i+2] - bg.data[i+2]);
+    out[i+3] = 255;
+  }
+  return new ImageData(out, frame.width, frame.height);
+}
+
+function findBlob(diffFrame) {
+  const data   = diffFrame.data;
+  const W      = diffFrame.width;
+  const H      = diffFrame.height;
+  const thresh = parseInt(document.getElementById('blob-thresh').value) || 20;
+  const pct    = (parseInt(document.getElementById('blob-pct').value) || 30) / 100;
+  const minB   = parseInt(document.getElementById('min-blob-bright').value) || 60;
+
+  // Find max brightness in diff
+  let maxBright = 0;
+  for (let i = 0; i < data.length; i += 4) {
+    const b = data[i] + data[i+1] + data[i+2];
+    if (b > maxBright) maxBright = b;
+  }
+
+  if (maxBright < minB) {
+    // Too dark, no blob found
+    return null;
+  }
+
+  const cutoff = Math.max(thresh * 3, maxBright * pct);
+
+  let sumX = 0, sumY = 0, sumW = 0;
+  // Also track bounding box of blob
+  let minX=W, maxX=0, minY=H, maxY=0;
+
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const i = (y * W + x) * 4;
+      const b = data[i] + data[i+1] + data[i+2];
+      if (b >= cutoff) {
+        sumX += x * b;
+        sumY += y * b;
+        sumW += b;
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+      }
+    }
+  }
+
+  if (sumW === 0) return null;
+
+  return {
+    cx: sumX / sumW,
+    cy: sumY / sumW,
+    maxBrightness: maxBright,
+    bboxW: maxX - minX,
+    bboxH: maxY - minY,
+  };
+}
+
+// ============================================================
+//  Render helpers
+// ============================================================
+function renderSmall(imageData, canvas) {
+  const ctx = canvas.getContext('2d');
+  const tmp = document.createElement('canvas');
+  tmp.width  = imageData.width;
+  tmp.height = imageData.height;
+  tmp.getContext('2d').putImageData(imageData, 0, 0);
+  ctx.drawImage(tmp, 0, 0, canvas.width, canvas.height);
+}
+
+function renderDiffWithBlob(diffData, blob, canvas) {
+  const W = canvas.width, H = canvas.height;
+  const scaleX = W / diffData.width;
+  const scaleY = H / diffData.height;
+  renderSmall(diffData, canvas);
+  if (!blob) return;
+  const ctx = canvas.getContext('2d');
+  const bx = blob.cx * scaleX;
+  const by = blob.cy * scaleY;
+  ctx.strokeStyle = '#0f9';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(bx, by, 8, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(bx - 12, by); ctx.lineTo(bx + 12, by);
+  ctx.moveTo(bx, by - 12); ctx.lineTo(bx, by + 12);
+  ctx.stroke();
+  ctx.fillStyle = '#0f9';
+  ctx.font = '10px monospace';
+  ctx.fillText(`(${blob.cx.toFixed(1)},${blob.cy.toFixed(1)}) bright:${blob.maxBrightness}`, bx+14, by);
+}
+
+// ============================================================
+//  Scanning
+// ============================================================
+async function scanAll() {
+  if (!stream)       { logErr('Camera not started'); return; }
+  if (!bgImageData)  { logErr('Capture background first'); return; }
+  if (devices.length === 0) { logErr('Discover devices first'); return; }
+
+  scanAborted = false;
+  document.getElementById('abort-btn').disabled = false;
+  document.getElementById('scan-progress-container').style.display = '';
+
+  // Fetch layouts and set up
+  for (let di = 0; di < devices.length; di++) {
+    if (!isDeviceChecked(di)) continue;
+    const d = devices[di];
+    try {
+      log(`Fetching pixel layout from ${d.name}...`);
+      d.layout = await fetchPixelLayout(d.ip);
+      document.getElementById(`dev-leds-${di}`).textContent = `${d.layout.length} LEDs`;
+      logOk(`  ${d.name}: ${d.layout.length} LEDs in layout`);
+    } catch(e) {
+      logErr(`  ${d.name} layout fetch failed: ${e.message}`);
+      d.layout = [];
+    }
+    d.detected = [];
+  }
+
+  // Create per-device debug canvases
+  const perDevDiv = document.getElementById('per-device-canvases');
+  perDevDiv.innerHTML = '';
+  devices.forEach((d, i) => {
+    if (!isDeviceChecked(i) || d.layout.length === 0) return;
+    const color = DEVICE_COLORS[i % DEVICE_COLORS.length];
+    const wrap = document.createElement('div');
+    wrap.innerHTML = `
+      <div class="canvas-label" style="color:${color}">${d.name} — detected LED positions</div>
+      <canvas id="dev-canvas-${i}" width="320" height="180" style="border-color:${color}30"></canvas>
+    `;
+    perDevDiv.appendChild(wrap);
+  });
+
+  const capDelay = parseInt(document.getElementById('cap-delay').value) || 250;
+  const maxLeds  = parseInt(document.getElementById('max-leds').value) || 0;
+
+  for (let di = 0; di < devices.length; di++) {
+    if (scanAborted) break;
+    if (!isDeviceChecked(di)) continue;
+    const d = devices[di];
+    if (d.layout.length === 0) { logWarn(`${d.name}: no layout, skipping`); continue; }
+
+    setDeviceStatus(di, 'scanning', '');
+    log(`Scanning ${d.name} (${d.layout.length} LEDs)...`);
+
+    // Flash is already disabled mesh-wide from allLedsOff().
+    // Just make sure no other device has a stale probe pixel lit.
+    for (let oi = 0; oi < devices.length; oi++) {
+      if (oi !== di) {
+        try { await postTo(devices[oi].ip, '/led_pixel', 'idx=-1'); } catch(e) {}
+      }
+    }
+
+    const leds = maxLeds > 0 ? d.layout.slice(0, maxLeds) : d.layout;
+    d.detected = new Array(d.layout.length).fill(null);
+
+    for (let li = 0; li < leds.length; li++) {
+      if (scanAborted) break;
+      const led = leds[li];
+
+      // Update progress
+      const prog = document.getElementById('scan-progress');
+      const label = document.getElementById('scan-progress-label');
+      prog.value = li / leds.length;
+      label.textContent = `${d.name} — LED ${li+1}/${leds.length} (idx ${led.idx})`;
+
+      // Light up this LED
+      try { await postTo(d.ip, '/led_pixel', `idx=${led.idx}`); } catch(e) { /* ignore */ }
+
+      await delay(capDelay);
+
+      // Capture and process
+      let blob = null;
+      try {
+        const frame = await captureFullRes();
+        lastFullFrame = frame;
+        const diff  = subtractBackground(frame, bgImageData);
+        blob = findBlob(diff);
+
+        // Show diff on canvas (scaled)
+        const diffCanvas = document.getElementById('diff-canvas');
+        renderDiffWithBlob(diff, blob, diffCanvas);
+
+        if (blob) {
+          d.detected[led.idx] = { idx: led.idx, cx: blob.cx, cy: blob.cy, brightness: blob.maxBrightness };
+          // Draw blob on blob canvas
+          renderBlobCanvas(blob, frame);
+        } else {
+          logWarn(`  ${d.name} idx ${led.idx}: no blob (max diff ${blob ? blob.maxBrightness : '?'})`);
+        }
+
+        // Update per-device canvas
+        updateDeviceCanvas(di);
+
+      } catch(e) {
+        logErr(`  Capture error at ${d.name} idx ${led.idx}: ${e.message}`);
+      }
+    }
+
+    // Turn off probe
+    try { await postTo(d.ip, '/led_pixel', 'idx=-1'); } catch(e) {}
+
+    const detected = d.detected.filter(v => v !== null).length;
+    logOk(`${d.name}: ${detected}/${leds.length} LEDs detected`);
+    setDeviceStatus(di, `done (${detected}/${leds.length})`, 'log-ok');
+  }
+
+  document.getElementById('abort-btn').disabled = true;
+  document.getElementById('scan-progress-container').style.display = 'none';
+  if (!scanAborted) {
+    logOk('Scan complete. Run "Compute Calibration" next.');
+    // Draw overlay
+    drawOverlayCanvas();
+  }
+}
+
+function abortScan() {
+  scanAborted = true;
+  log('Aborting scan...');
+}
+
+function renderBlobCanvas(blob, frame) {
+  const canvas = document.getElementById('blob-canvas');
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  const scaleX = W / frame.width;
+  const scaleY = H / frame.height;
+
+  // Draw full frame small
+  renderSmall(frame, canvas);
+
+  // Draw crosshair at blob
+  const bx = blob.cx * scaleX;
+  const by = blob.cy * scaleY;
+  ctx.strokeStyle = '#ff0';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(bx, by, 10, 0, Math.PI * 2);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(bx - 15, by); ctx.lineTo(bx + 15, by);
+  ctx.moveTo(bx, by - 15); ctx.lineTo(bx, by + 15);
+  ctx.stroke();
+  // Zoom inset: show 80x80 px region around blob
+  const zSize = 80;
+  const sx = Math.max(0, Math.round(blob.cx - zSize/2));
+  const sy = Math.max(0, Math.round(blob.cy - zSize/2));
+  const sw = Math.min(zSize, frame.width  - sx);
+  const sh = Math.min(zSize, frame.height - sy);
+  const tmp = document.createElement('canvas');
+  tmp.width  = frame.width;
+  tmp.height = frame.height;
+  tmp.getContext('2d').putImageData(frame, 0, 0);
+  ctx.drawImage(tmp, sx, sy, sw, sh, 0, H - 80, 80, 80);
+  ctx.strokeStyle = '#ff0'; ctx.lineWidth = 1;
+  ctx.strokeRect(0, H - 80, 80, 80);
+  ctx.fillStyle = '#ff0'; ctx.font = '9px monospace';
+  ctx.fillText('zoom', 0, H - 81);
+}
+
+function updateDeviceCanvas(di) {
+  const canvas = document.getElementById(`dev-canvas-${di}`);
+  if (!canvas || !lastFullFrame) return;
+  const d = devices[di];
+  const color = DEVICE_COLORS[di % DEVICE_COLORS.length];
+  const W = canvas.width, H = canvas.height;
+  const scaleX = W / lastFullFrame.width;
+  const scaleY = H / lastFullFrame.height;
+
+  renderSmall(lastFullFrame, canvas);
+  const ctx = canvas.getContext('2d');
+
+  for (const det of d.detected) {
+    if (!det) continue;
+    const x = det.cx * scaleX;
+    const y = det.cy * scaleY;
+    ctx.strokeStyle = color;
+    ctx.fillStyle   = color;
+    ctx.lineWidth   = 1.5;
+    ctx.beginPath();
+    ctx.arc(x, y, 3, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.font = '7px monospace';
+    ctx.fillText(det.idx, x + 4, y - 2);
+  }
+}
+
+// ============================================================
+//  Overlay canvas (all devices, camera space)
+// ============================================================
+function drawOverlayCanvas() {
+  const canvas = document.getElementById('overlay-canvas');
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+
+  if (!lastFullFrame) { ctx.fillStyle = '#333'; ctx.fillRect(0,0,W,H); return; }
+  const scaleX = W / lastFullFrame.width;
+  const scaleY = H / lastFullFrame.height;
+  renderSmall(lastFullFrame, canvas);
+
+  for (let di = 0; di < devices.length; di++) {
+    const d = devices[di];
+    const color = DEVICE_COLORS[di % DEVICE_COLORS.length];
+    ctx.strokeStyle = color;
+    ctx.fillStyle   = color;
+
+    for (const det of d.detected) {
+      if (!det) continue;
+      const x = det.cx * scaleX;
+      const y = det.cy * scaleY;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(x, y, 4, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
+    // Label
+    const first = d.detected.find(v => v !== null);
+    if (first) {
+      ctx.font = '10px monospace';
+      ctx.fillText(d.name, first.cx * scaleX + 6, first.cy * scaleY - 6);
+    }
+  }
+}
+
+// ============================================================
+//  Math: similarity transform (Procrustes)
+// ============================================================
+// Finds s, theta, (tx, ty) such that cam[i] = s*R(theta)*local[i] + (tx,ty)
+// localPts: [{x,y}] in mm, camPts: [{x,y}] in pixels
+// Returns null if not enough points.
+function fitSimilarity(localPts, camPts) {
+  const n = localPts.length;
+  if (n < 2) return null;
+
+  let Lx=0,Ly=0,Px=0,Py=0;
+  for (let i=0;i<n;i++){Lx+=localPts[i].x;Ly+=localPts[i].y;Px+=camPts[i].x;Py+=camPts[i].y;}
+  Lx/=n;Ly/=n;Px/=n;Py/=n;
+
+  let a=0,b=0,denom=0;
+  for (let i=0;i<n;i++){
+    const lx=localPts[i].x-Lx, ly=localPts[i].y-Ly;
+    const px=camPts[i].x-Px,   py=camPts[i].y-Py;
+    a     += lx*px + ly*py;
+    b     += lx*py - ly*px;
+    denom += lx*lx + ly*ly;
+  }
+
+  if (denom < 1e-12) return null;
+
+  const theta = Math.atan2(b, a);
+  const s     = Math.sqrt(a*a + b*b) / denom;  // px/mm
+  const cosT  = Math.cos(theta), sinT = Math.sin(theta);
+  const tx    = Px - s*(cosT*Lx - sinT*Ly);
+  const ty    = Py - s*(sinT*Lx + cosT*Ly);
+
+  return { s, theta, tx, ty };
+}
+
+// Apply inverse similarity: camera px → world mm (using reference transform)
+function invSimilarityPt(T, px, py) {
+  const cosT = Math.cos(-T.theta), sinT = Math.sin(-T.theta);
+  const dx = px - T.tx, dy = py - T.ty;
+  return {
+    x: (cosT*dx - sinT*dy) / T.s,
+    y: (sinT*dx + cosT*dy) / T.s,
+  };
+}
+
+// Apply forward similarity
+function fwdSimilarityPt(T, x, y) {
+  const cosT = Math.cos(T.theta), sinT = Math.sin(T.theta);
+  return {
+    x: T.s*(cosT*x - sinT*y) + T.tx,
+    y: T.s*(sinT*x + cosT*y) + T.ty,
+  };
+}
+
+// Residual RMS of a similarity fit
+function similarityResiduals(T, localPts, camPts) {
+  let sumSq = 0;
+  for (let i=0;i<localPts.length;i++){
+    const p = fwdSimilarityPt(T, localPts[i].x, localPts[i].y);
+    const dx = p.x - camPts[i].x;
+    const dy = p.y - camPts[i].y;
+    sumSq += dx*dx + dy*dy;
+  }
+  return Math.sqrt(sumSq / localPts.length);
+}
+
+// Fit rigid body (rotation + translation, fixed scale=1)
+// world[i] = R(rot)*local[i] + (tx,ty)
+function fitRigid(localPts, worldPts) {
+  const n = localPts.length;
+  if (n < 2) return null;
+
+  let Lx=0,Ly=0,Wx=0,Wy=0;
+  for(let i=0;i<n;i++){Lx+=localPts[i].x;Ly+=localPts[i].y;Wx+=worldPts[i].x;Wy+=worldPts[i].y;}
+  Lx/=n;Ly/=n;Wx/=n;Wy/=n;
+
+  let a=0,b=0;
+  for(let i=0;i<n;i++){
+    const lx=localPts[i].x-Lx, ly=localPts[i].y-Ly;
+    const wx=worldPts[i].x-Wx, wy=worldPts[i].y-Wy;
+    a += lx*wx + ly*wy;
+    b += lx*wy - ly*wx;
+  }
+
+  const rot   = Math.atan2(b, a);
+  const rotDeg = rot * 180 / Math.PI;
+  const cosT  = Math.cos(rot), sinT = Math.sin(rot);
+  const tx    = Wx - (cosT*Lx - sinT*Ly);
+  const ty    = Wy - (sinT*Lx + cosT*Ly);
+
+  // RMS residual in mm
+  let sumSq = 0;
+  for(let i=0;i<n;i++){
+    const ex = cosT*localPts[i].x - sinT*localPts[i].y + tx - worldPts[i].x;
+    const ey = sinT*localPts[i].x + cosT*localPts[i].y + ty - worldPts[i].y;
+    sumSq += ex*ex + ey*ey;
+  }
+  const residualRms = Math.sqrt(sumSq / n);
+
+  return { rot, rotDeg, tx, ty, residualRms };
+}
+
+// ============================================================
+//  Analysis
+// ============================================================
+async function analyzeResults() {
+  // Collect valid device data
+  const valid = [];
+  for (let di = 0; di < devices.length; di++) {
+    const d = devices[di];
+    const pairs = [];
+    for (const det of d.detected) {
+      if (!det) continue;
+      const layoutPt = d.layout.find(p => p.idx === det.idx);
+      if (!layoutPt) continue;
+      pairs.push({ local: { x: layoutPt.x, y: layoutPt.y }, cam: { x: det.cx, y: det.cy } });
+    }
+    if (pairs.length < 2) {
+      logWarn(`${d.name}: only ${pairs.length} matched LED(s), need >=2, skipping`);
+      continue;
+    }
+    const localPts = pairs.map(p => p.local);
+    const camPts   = pairs.map(p => p.cam);
+    const T = fitSimilarity(localPts, camPts);
+    if (!T) { logErr(`${d.name}: similarity fit failed`); continue; }
+    const resRms = similarityResiduals(T, localPts, camPts);
+    valid.push({ di, d, T, localPts, camPts, pairs, resRms });
+  }
+
+  if (valid.length === 0) { logErr('No valid device data to analyze'); return; }
+
+  // Reference is first valid device
+  const ref = valid[0];
+  logOk(`Reference device: ${ref.d.name} (${ref.pairs.length} LEDs, scale ${ref.T.s.toFixed(4)} px/mm)`);
+
+  // Scale comparison table
+  const refScaleMmPx = 1 / ref.T.s;
+  let scaleTableHtml = `<table>
+    <tr><th>Device</th><th>LEDs</th><th>px/mm</th><th>mm/px</th><th>vs ref</th><th>cam resid (px)</th></tr>`;
+
+  calibResults = [];
+
+  for (const v of valid) {
+    const scalePxMm  = v.T.s;
+    const scaleMmPx  = 1 / v.T.s;
+    const diffPct    = (scaleMmPx - refScaleMmPx) / refScaleMmPx * 100;
+    const isRef      = v === ref;
+    const scaleOk    = Math.abs(diffPct) < 10;
+    const scaleCls   = isRef ? '' : (scaleOk ? 'ok' : 'err');
+    const diffStr    = isRef ? 'ref' : `${diffPct > 0 ? '+' : ''}${diffPct.toFixed(1)}%`;
+
+    scaleTableHtml += `<tr>
+      <td style="color:${DEVICE_COLORS[v.di % DEVICE_COLORS.length]}">${v.d.name}</td>
+      <td>${v.pairs.length}</td>
+      <td>${scalePxMm.toFixed(4)}</td>
+      <td>${scaleMmPx.toFixed(3)}</td>
+      <td class="${scaleCls}">${diffStr}</td>
+      <td>${v.resRms.toFixed(2)}</td>
+    </tr>`;
+
+    if (!scaleOk && !isRef) {
+      logWarn(`${v.d.name}: scale differs ${diffPct.toFixed(1)}% from reference — this may indicate a problem!`);
+    }
+
+    // Compute world positions for this device's LEDs via reference transform
+    const worldPts = v.camPts.map(cp => invSimilarityPt(ref.T, cp.x, cp.y));
+
+    let layout_x = 0, layout_y = 0, layout_rot = 0, residualRms = 0;
+    if (isRef) {
+      layout_x = 0; layout_y = 0; layout_rot = 0;
+      residualRms = v.resRms / v.T.s; // convert px residual to mm
+    } else {
+      const rigid = fitRigid(v.localPts, worldPts);
+      if (!rigid) { logErr(`${v.d.name}: rigid fit failed`); continue; }
+      layout_x    = rigid.tx;
+      layout_y    = rigid.ty;
+      layout_rot  = rigid.rotDeg;
+      residualRms = rigid.residualRms;
+      logOk(`${v.d.name}: x=${layout_x.toFixed(1)}mm y=${layout_y.toFixed(1)}mm rot=${layout_rot.toFixed(2)}° residual=${rigid.residualRms.toFixed(2)}mm`);
+    }
+
+    calibResults.push({ ip: v.d.ip, name: v.d.name, layout_x, layout_y, layout_rot, residualRms, worldPts, di: v.di });
+  }
+  scaleTableHtml += '</table>';
+  document.getElementById('scale-table-container').innerHTML = scaleTableHtml;
+
+  // Calibration results table
+  let calibTableHtml = `<table>
+    <tr><th>Device</th><th>layout_x (mm)</th><th>layout_y (mm)</th><th>layout_rot (°)</th><th>resid rms (mm)</th></tr>`;
+  for (const r of calibResults) {
+    const residCls = r.residualRms < 5 ? 'ok' : r.residualRms < 15 ? 'warn' : 'err';
+    calibTableHtml += `<tr>
+      <td style="color:${DEVICE_COLORS[r.di % DEVICE_COLORS.length]}">${r.name}</td>
+      <td>${r.layout_x.toFixed(2)}</td>
+      <td>${r.layout_y.toFixed(2)}</td>
+      <td>${r.layout_rot.toFixed(3)}</td>
+      <td class="${residCls}">${r.residualRms.toFixed(2)}</td>
+    </tr>`;
+  }
+  calibTableHtml += '</table>';
+  document.getElementById('calib-table-container').innerHTML = calibTableHtml;
+
+  // Residuals detail
+  let residHtml = '';
+  for (const v of valid) {
+    const cr = calibResults.find(r => r.ip === v.d.ip);
+    if (!cr) continue;
+    residHtml += `<div style="margin:.3rem 0"><span style="color:${DEVICE_COLORS[v.di % DEVICE_COLORS.length]}">${v.d.name}</span>: cam fit resid = ${v.resRms.toFixed(2)}px, world resid = ${cr.residualRms.toFixed(2)}mm</div>`;
+  }
+  document.getElementById('residuals-container').innerHTML = residHtml;
+
+  // Draw world space canvas
+  drawWorldCanvas();
+
+  // Draw overlay with calibration
+  drawOverlayCanvas();
+}
+
+// ============================================================
+//  World space canvas
+// ============================================================
+function drawWorldCanvas() {
+  const canvas = document.getElementById('world-canvas');
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, W, H);
+
+  if (calibResults.length === 0) return;
+
+  // Collect all world points across all devices
+  const allWorld = [];
+  for (const cr of calibResults) {
+    if (!cr.worldPts) continue;
+    for (const wp of cr.worldPts) {
+      allWorld.push(wp);
+    }
+  }
+  if (allWorld.length === 0) return;
+
+  // Find bounds
+  let minX=Infinity, maxX=-Infinity, minY=Infinity, maxY=-Infinity;
+  for (const p of allWorld) {
+    if (p.x < minX) minX = p.x;
+    if (p.x > maxX) maxX = p.x;
+    if (p.y < minY) minY = p.y;
+    if (p.y > maxY) maxY = p.y;
+  }
+
+  const pad = 40;
+  const rangeX = maxX - minX || 1;
+  const rangeY = maxY - minY || 1;
+  const scaleX = (W - pad*2) / rangeX;
+  const scaleY = (H - pad*2) / rangeY;
+  const scale  = Math.min(scaleX, scaleY);
+
+  const toCanvas = (wx, wy) => ({
+    x: pad + (wx - minX) * scale,
+    y: pad + (wy - minY) * scale,
+  });
+
+  // Draw grid (every 100mm)
+  ctx.strokeStyle = '#111';
+  ctx.lineWidth   = 1;
+  const gridStep = 100; // mm
+  for (let gx = Math.ceil(minX/gridStep)*gridStep; gx <= maxX; gx += gridStep) {
+    const p = toCanvas(gx, minY);
+    ctx.beginPath(); ctx.moveTo(p.x, pad); ctx.lineTo(p.x, H-pad); ctx.stroke();
+    ctx.fillStyle = '#333'; ctx.font = '8px monospace';
+    ctx.fillText(`${gx}mm`, p.x+2, H-pad+10);
+  }
+  for (let gy = Math.ceil(minY/gridStep)*gridStep; gy <= maxY; gy += gridStep) {
+    const p = toCanvas(minX, gy);
+    ctx.beginPath(); ctx.moveTo(pad, p.y); ctx.lineTo(W-pad, p.y); ctx.stroke();
+    ctx.fillStyle = '#333'; ctx.font = '8px monospace';
+    ctx.fillText(`${gy}`, 0, p.y);
+  }
+
+  // Draw axes
+  const origin = toCanvas(0, 0);
+  if (origin.x >= pad && origin.x <= W-pad) {
+    ctx.strokeStyle = '#333'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(origin.x, pad); ctx.lineTo(origin.x, H-pad); ctx.stroke();
+  }
+  if (origin.y >= pad && origin.y <= H-pad) {
+    ctx.beginPath(); ctx.moveTo(pad, origin.y); ctx.lineTo(W-pad, origin.y); ctx.stroke();
+  }
+
+  // Draw each device's world points
+  for (const cr of calibResults) {
+    if (!cr.worldPts) continue;
+    const color = DEVICE_COLORS[cr.di % DEVICE_COLORS.length];
+    ctx.fillStyle   = color;
+    ctx.strokeStyle = color;
+
+    for (const wp of cr.worldPts) {
+      const p = toCanvas(wp.x, wp.y);
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 2.5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Label at centroid of world points
+    if (cr.worldPts.length > 0) {
+      let cx=0,cy=0;
+      for (const wp of cr.worldPts){cx+=wp.x;cy+=wp.y;}
+      cx/=cr.worldPts.length; cy/=cr.worldPts.length;
+      const p = toCanvas(cx, cy);
+      ctx.font = '10px monospace';
+      ctx.fillText(cr.name, p.x+5, p.y-5);
+    }
+
+    // Draw layout origin marker (where 0,0 of local coords maps to)
+    const originWorld = { x: cr.layout_x, y: cr.layout_y };
+    const op = toCanvas(originWorld.x, originWorld.y);
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(op.x-8, op.y); ctx.lineTo(op.x+8, op.y);
+    ctx.moveTo(op.x, op.y-8); ctx.lineTo(op.x, op.y+8);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(op.x, op.y, 4, 0, Math.PI*2);
+    ctx.stroke();
+  }
+}
+
+// ============================================================
+//  Upload
+// ============================================================
+async function uploadCalibration() {
+  if (calibResults.length === 0) { logErr('Run analysis first'); return; }
+  log('Uploading calibration...');
+  for (const r of calibResults) {
+    try {
+      const body = `layout_x=${r.layout_x.toFixed(3)}&layout_y=${r.layout_y.toFixed(3)}&layout_rot=${r.layout_rot.toFixed(4)}`;
+      const res = await postTo(r.ip, '/node_config', body);
+      if (res.ok || res.status === 204) {
+        logOk(`  ${r.name}: uploaded x=${r.layout_x.toFixed(1)} y=${r.layout_y.toFixed(1)} rot=${r.layout_rot.toFixed(2)}°`);
+      } else {
+        logErr(`  ${r.name}: HTTP ${res.status}`);
+      }
+    } catch(e) {
+      logErr(`  ${r.name}: ${e.message}`);
+    }
+  }
+  logOk('Upload complete');
+}
+
+async function resetAllTransforms() {
+  if (!confirm('Reset ALL device layout transforms to 0,0,0?')) return;
+  for (const d of devices) {
+    try {
+      await postTo(d.ip, '/node_config', 'layout_x=0&layout_y=0&layout_rot=0');
+      logOk(`${d.name}: reset to 0,0,0`);
+    } catch(e) {
+      logErr(`${d.name}: ${e.message}`);
+    }
+  }
+}
+</script>
+</body>
+</html>

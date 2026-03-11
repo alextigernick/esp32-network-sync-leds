@@ -95,6 +95,7 @@
 #include "led.h"
 #include "esp_http_client.h"
 #include "esp_http_server.h"
+#include "esp_https_server.h"
 #include "esp_log.h"
 #include "esp_ota_ops.h"
 #include "esp_system.h"
@@ -104,10 +105,23 @@
 
 #define TAG "web_server"
 
-extern const uint8_t web_ui_html_start[] asm("_binary_web_ui_html_start");
-extern const uint8_t web_ui_html_end[]   asm("_binary_web_ui_html_end");
+extern const uint8_t web_ui_html_start[]    asm("_binary_web_ui_html_start");
+extern const uint8_t web_ui_html_end[]      asm("_binary_web_ui_html_end");
+extern const uint8_t calibrate_html_start[] asm("_binary_calibrate_html_start");
+extern const uint8_t calibrate_html_end[]   asm("_binary_calibrate_html_end");
+extern const uint8_t server_crt_start[]     asm("_binary_server_crt_start");
+extern const uint8_t server_crt_end[]       asm("_binary_server_crt_end");
+extern const uint8_t server_key_start[]     asm("_binary_server_key_start");
+extern const uint8_t server_key_end[]       asm("_binary_server_key_end");
 
 static bool s_led_on = false;
+
+// Allow the calibration page (served from any device) to make cross-origin
+// requests to peer devices.  Added to every response that the calibration
+// tool needs to read.
+static void add_cors(httpd_req_t *req) {
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+}
 
 static void web_led_set(bool on) {
     s_led_on = on;
@@ -117,6 +131,7 @@ static void web_led_set(bool on) {
 // ---- /state JSON endpoint ----------------------------------------------
 
 static esp_err_t handle_state(httpd_req_t *req) {
+    add_cors(req);
     peer_t peers[MAX_PEERS];
     int peer_count = discovery_get_peers(peers, MAX_PEERS);
     uint64_t sync_ms = time_sync_get_ms();
@@ -211,6 +226,15 @@ static esp_err_t handle_get(httpd_req_t *req) {
     httpd_resp_set_type(req, "text/html");
     httpd_resp_send(req, (const char *)web_ui_html_start,
                     web_ui_html_end - web_ui_html_start);
+    return ESP_OK;
+}
+
+// ---- /calibrate HTML page ----------------------------------------------
+
+static esp_err_t handle_calibrate_get(httpd_req_t *req) {
+    httpd_resp_set_type(req, "text/html");
+    httpd_resp_send(req, (const char *)calibrate_html_start,
+                    calibrate_html_end - calibrate_html_start);
     return ESP_OK;
 }
 
@@ -359,6 +383,7 @@ static esp_err_t handle_settings_get(httpd_req_t *req) {
 // ---- /settings POST ----------------------------------------------------
 
 static esp_err_t handle_settings_post(httpd_req_t *req) {
+    add_cors(req);
     char body[384] = {0};
     int recv_len = req->content_len < (int)sizeof(body) - 1
                    ? req->content_len : (int)sizeof(body) - 1;
@@ -391,6 +416,7 @@ static esp_err_t handle_settings_post(httpd_req_t *req) {
 // ---- /node_config GET --------------------------------------------------
 
 static esp_err_t handle_node_config_get(httpd_req_t *req) {
+    add_cors(req);
     strip_cfg_t strips[MAX_STRIPS];
     int strip_count;
     node_config_get_strips(strips, &strip_count);
@@ -421,6 +447,7 @@ static esp_err_t handle_node_config_get(httpd_req_t *req) {
 // ---- /node_config POST -------------------------------------------------
 
 static esp_err_t handle_node_config_post(httpd_req_t *req) {
+    add_cors(req);
     char body[256] = {0};
     int recv_len = req->content_len < (int)sizeof(body) - 1
                    ? req->content_len : (int)sizeof(body) - 1;
@@ -504,6 +531,7 @@ static esp_err_t handle_identify(httpd_req_t *req) {
 // ---- /led_pixel POST ---------------------------------------------------
 
 static esp_err_t handle_led_pixel_post(httpd_req_t *req) {
+    add_cors(req);
     char body[32] = {0};
     int recv_len = req->content_len < (int)sizeof(body) - 1
                    ? req->content_len : (int)sizeof(body) - 1;
@@ -521,6 +549,7 @@ static esp_err_t handle_led_pixel_post(httpd_req_t *req) {
 // ---- /pixel_layout GET -------------------------------------------------
 
 static esp_err_t handle_pixel_layout_get(httpd_req_t *req) {
+    add_cors(req);
     httpd_resp_set_type(req, "text/plain");
     FILE *f = fopen("/spiffs/pixel_layout.csv", "r");
     if (!f) {
@@ -893,27 +922,115 @@ static esp_err_t handle_presets_sync(httpd_req_t *req) {
     return ESP_OK;
 }
 
+// ---- /fwd/{peer_ip}{path} reverse proxy --------------------------------
+// Forwards GET/POST requests from the HTTPS calibration page to peer devices
+// over plain HTTP (internal LAN only). This keeps the calibration page on a
+// single HTTPS origin (the AP at 192.168.4.1) so the browser never sees
+// mixed-content or cross-origin issues.
+
+static esp_err_t handle_proxy(httpd_req_t *req) {
+    add_cors(req);
+
+    // URI: /fwd/{peer_ip}{path}  e.g. /fwd/192.168.4.2/led_pixel
+    const char *uri = req->uri;
+    const char *peer_start = uri + 5; // skip "/fwd/"
+
+    // Find the '/' that separates IP from path
+    const char *path_start = strchr(peer_start, '/');
+    if (!path_start) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Bad proxy URI");
+        return ESP_FAIL;
+    }
+
+    char peer_ip[48] = {0};
+    int ip_len = (int)(path_start - peer_start);
+    if (ip_len < 1 || ip_len >= (int)sizeof(peer_ip)) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Bad peer IP");
+        return ESP_FAIL;
+    }
+    memcpy(peer_ip, peer_start, ip_len);
+
+    char url[128] = {0};
+    snprintf(url, sizeof(url), "http://%s%s", peer_ip, path_start);
+
+    // Read request body (for POST)
+    static char req_body[512];
+    int body_len = 0;
+    if (req->content_len > 0) {
+        body_len = req->content_len < (int)sizeof(req_body) - 1
+                   ? req->content_len : (int)sizeof(req_body) - 1;
+        httpd_req_recv(req, req_body, body_len);
+        req_body[body_len] = '\0';
+    }
+
+    // Choose method
+    esp_http_client_method_t method =
+        (req->method == HTTP_POST) ? HTTP_METHOD_POST : HTTP_METHOD_GET;
+
+    esp_http_client_config_t cfg = {
+        .url        = url,
+        .method     = method,
+        .timeout_ms = SETTINGS_HTTP_TIMEOUT_MS,
+    };
+    esp_http_client_handle_t client = esp_http_client_init(&cfg);
+    if (!client) {
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Client init failed");
+        return ESP_FAIL;
+    }
+
+    if (body_len > 0) {
+        char ct[80] = {0};
+        httpd_req_get_hdr_value_str(req, "Content-Type", ct, sizeof(ct));
+        if (ct[0]) esp_http_client_set_header(client, "Content-Type", ct);
+        esp_http_client_set_post_field(client, req_body, body_len);
+    }
+
+    // Open connection and fetch headers
+    esp_err_t err = esp_http_client_open(client, body_len > 0 ? body_len : 0);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "proxy open %s: %s", url, esp_err_to_name(err));
+        esp_http_client_cleanup(client);
+        httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Proxy connect failed");
+        return ESP_FAIL;
+    }
+
+    int64_t content_len = esp_http_client_fetch_headers(client);
+    int status = esp_http_client_get_status_code(client);
+
+    // Map status to response string
+    if (status == 204) {
+        httpd_resp_set_status(req, "204 No Content");
+    } else if (status != 200) {
+        char status_buf[32];
+        snprintf(status_buf, sizeof(status_buf), "%d Error", status);
+        httpd_resp_set_status(req, status_buf);
+    }
+
+    // Stream response body in chunks
+    static char chunk[512];
+    int total = 0;
+    int n;
+    (void)content_len;
+    while ((n = esp_http_client_read(client, chunk, sizeof(chunk))) > 0) {
+        httpd_resp_send_chunk(req, chunk, n);
+        total += n;
+    }
+    httpd_resp_send_chunk(req, NULL, 0);
+
+    esp_http_client_close(client);
+    esp_http_client_cleanup(client);
+
+    ESP_LOGD(TAG, "proxy %s → %d (%d bytes)", url, status, total);
+    return ESP_OK;
+}
+
 // ---- start -------------------------------------------------------------
 
-void web_server_start(void) {
-    httpd_config_t config    = HTTPD_DEFAULT_CONFIG();
-    config.stack_size        = 8192;
-    config.recv_wait_timeout = 30;
-    config.send_wait_timeout = 10;
-    config.max_uri_handlers  = 21;
-    config.max_open_sockets  = 5;    // leave room for discovery/time_sync/forward_task sockets
-    config.lru_purge_enable  = true; // recycle oldest idle socket when at max_open_sockets
-
-    ESP_LOGI(TAG, "Starting httpd...");
-    httpd_handle_t server = NULL;
-    if (httpd_start(&server, &config) != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to start HTTP server");
-        return;
-    }
-    ESP_LOGI(TAG, "httpd started");
-
+// Register all URI handlers on a given httpd instance.
+static void register_routes(httpd_handle_t server) {
     httpd_uri_t routes[] = {
-        { .uri = "/",           .method = HTTP_GET,  .handler = handle_get        },
+        { .uri = "/",           .method = HTTP_GET,  .handler = handle_get           },
+        { .uri = "/calibrate",  .method = HTTP_GET,  .handler = handle_calibrate_get },
         { .uri = "/state",      .method = HTTP_GET,  .handler = handle_state      },
         { .uri = "/led",        .method = HTTP_POST, .handler = handle_led_post   },
         { .uri = "/ota",        .method = HTTP_POST, .handler = handle_ota_post   },
@@ -922,21 +1039,67 @@ void web_server_start(void) {
         { .uri = "/settings",     .method = HTTP_POST, .handler = handle_settings_post    },
         { .uri = "/node_config",  .method = HTTP_GET,  .handler = handle_node_config_get  },
         { .uri = "/node_config",  .method = HTTP_POST, .handler = handle_node_config_post },
-        { .uri = "/pixel_layout",   .method = HTTP_GET,  .handler = handle_pixel_layout_get   },
-        { .uri = "/pixel_layout",   .method = HTTP_POST, .handler = handle_pixel_layout_post  },
-        { .uri = "/led_pixel",        .method = HTTP_POST, .handler = handle_led_pixel_post        },
-        { .uri = "/identify",         .method = HTTP_POST, .handler = handle_identify              },
+        { .uri = "/pixel_layout", .method = HTTP_GET,  .handler = handle_pixel_layout_get  },
+        { .uri = "/pixel_layout", .method = HTTP_POST, .handler = handle_pixel_layout_post },
+        { .uri = "/led_pixel",    .method = HTTP_POST, .handler = handle_led_pixel_post    },
+        { .uri = "/identify",     .method = HTTP_POST, .handler = handle_identify          },
         { .uri = "/presets",          .method = HTTP_GET,  .handler = handle_presets_get           },
         { .uri = "/presets/save",     .method = HTTP_POST, .handler = handle_presets_save          },
         { .uri = "/presets/load",     .method = HTTP_POST, .handler = handle_presets_load          },
         { .uri = "/presets/delete",   .method = HTTP_POST, .handler = handle_presets_delete        },
         { .uri = "/presets/default",  .method = HTTP_POST, .handler = handle_presets_set_default   },
-        { .uri = "/presets/clear",    .method = HTTP_POST, .handler = handle_presets_clear          },
-        { .uri = "/presets/sync",     .method = HTTP_POST, .handler = handle_presets_sync           },
+        { .uri = "/presets/clear",    .method = HTTP_POST, .handler = handle_presets_clear         },
+        { .uri = "/presets/sync",     .method = HTTP_POST, .handler = handle_presets_sync          },
+        // Proxy: forwards calibration tool requests to peer devices over HTTP.
+        // Must use wildcard matching — set uri_match_fn = httpd_uri_match_wildcard.
+        { .uri = "/fwd/*",  .method = HTTP_GET,  .handler = handle_proxy },
+        { .uri = "/fwd/*",  .method = HTTP_POST, .handler = handle_proxy },
     };
     for (int i = 0; i < (int)(sizeof(routes)/sizeof(routes[0])); i++) {
         httpd_register_uri_handler(server, &routes[i]);
     }
+}
 
-    ESP_LOGI(TAG, "HTTP server started on port %d", config.server_port);
+void web_server_start(void) {
+    // ---- Plain HTTP on port 80 (normal UI, peer-to-peer settings forwarding) ----
+    httpd_config_t http_cfg    = HTTPD_DEFAULT_CONFIG();
+    http_cfg.stack_size        = 8192;
+    http_cfg.recv_wait_timeout = 30;
+    http_cfg.send_wait_timeout = 10;
+    http_cfg.max_uri_handlers  = 24; // routes + 2 proxy wildcard entries
+    http_cfg.max_open_sockets  = 4;
+    http_cfg.lru_purge_enable  = true;
+    http_cfg.uri_match_fn      = httpd_uri_match_wildcard;
+
+    httpd_handle_t http_server = NULL;
+    if (httpd_start(&http_server, &http_cfg) == ESP_OK) {
+        register_routes(http_server);
+        ESP_LOGI(TAG, "HTTP  server started on port 80");
+    } else {
+        ESP_LOGE(TAG, "Failed to start HTTP server");
+    }
+
+    // ---- HTTPS on port 443 (calibration tool — enables camera API in browsers) ----
+    // Self-signed EC cert for 192.168.4.1 (the AP IP).  The calibration page is
+    // always accessed from the AP; peer API calls are proxied via /fwd/{ip}{path}.
+    httpd_ssl_config_t ssl_cfg        = HTTPD_SSL_CONFIG_DEFAULT();
+    ssl_cfg.httpd.stack_size          = 8192;
+    ssl_cfg.httpd.recv_wait_timeout   = 30;
+    ssl_cfg.httpd.send_wait_timeout   = 10;
+    ssl_cfg.httpd.max_uri_handlers    = 24;
+    ssl_cfg.httpd.max_open_sockets    = 3; // TLS sessions are memory-hungry; 3 is enough
+    ssl_cfg.httpd.lru_purge_enable    = true;
+    ssl_cfg.httpd.uri_match_fn        = httpd_uri_match_wildcard;
+    ssl_cfg.servercert                = server_crt_start;
+    ssl_cfg.servercert_len            = server_crt_end - server_crt_start;
+    ssl_cfg.prvtkey_pem               = server_key_start;
+    ssl_cfg.prvtkey_len               = server_key_end - server_key_start;
+
+    httpd_handle_t https_server = NULL;
+    if (httpd_ssl_start(&https_server, &ssl_cfg) == ESP_OK) {
+        register_routes(https_server);
+        ESP_LOGI(TAG, "HTTPS server started on port 443");
+    } else {
+        ESP_LOGE(TAG, "Failed to start HTTPS server");
+    }
 }
