@@ -554,26 +554,40 @@ function findBlob(diffFrame) {
   const pct    = (parseInt(document.getElementById('blob-pct').value) || 30) / 100;
   const minB   = parseInt(document.getElementById('min-blob-bright').value) || 60;
 
-  // Find max brightness in diff
-  let maxBright = 0;
-  for (let i = 0; i < data.length; i += 4) {
-    const b = data[i] + data[i+1] + data[i+2];
-    if (b > maxBright) maxBright = b;
-  }
-
-  if (maxBright < minB) {
-    // Too dark, no blob found
-    return null;
-  }
-
-  const cutoff = Math.max(thresh * 3, maxBright * pct);
-
-  let sumX = 0, sumY = 0, sumW = 0;
-  // Also track bounding box of blob
-  let minX=W, maxX=0, minY=H, maxY=0;
-
+  // Step 1: find the single brightest pixel (peak). This anchors us to the
+  // actual LED rather than letting stray reflections or other panels pull the
+  // centroid across the frame.
+  let maxBright = 0, peakX = 0, peakY = 0;
   for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {
+      const i = (y * W + x) * 4;
+      const b = data[i] + data[i+1] + data[i+2];
+      if (b > maxBright) { maxBright = b; peakX = x; peakY = y; }
+    }
+  }
+
+  if (maxBright < minB) return null;
+
+  // Step 2: threshold relative to the peak.
+  const cutoff = Math.max(thresh * 3, maxBright * pct);
+
+  // Step 3: weighted centroid restricted to a radius around the peak.
+  // Radius = 15% of the shorter image dimension — large enough to cover a
+  // diffuse LED bloom, small enough to exclude distant blobs.
+  // Large blobs contribute more total weight, naturally biasing toward them
+  // over isolated hot pixels.
+  const searchR  = Math.min(W, H) * 0.15;
+  const searchR2 = searchR * searchR;
+
+  let sumX = 0, sumY = 0, sumW = 0;
+  let minX = W, maxX = 0, minY = H, maxY = 0;
+
+  for (let y = 0; y < H; y++) {
+    const dy = y - peakY;
+    if (dy * dy > searchR2) continue;
+    for (let x = 0; x < W; x++) {
+      const dx = x - peakX;
+      if (dx * dx + dy * dy > searchR2) continue;
       const i = (y * W + x) * 4;
       const b = data[i] + data[i+1] + data[i+2];
       if (b >= cutoff) {
@@ -678,12 +692,28 @@ async function scanAll() {
   devices.forEach((d, i) => {
     if (!isDeviceChecked(i) || d.layout.length === 0) return;
     const color = DEVICE_COLORS[i % DEVICE_COLORS.length];
+    const h = Math.round(320 * bgImageData.height / bgImageData.width);
     const wrap = document.createElement('div');
+    wrap.style.cssText = 'display:flex;flex-direction:column;gap:.4rem';
     wrap.innerHTML = `
-      <div class="canvas-label" style="color:${color}">${d.name} — detected LED positions</div>
-      <canvas id="dev-canvas-${i}" width="320" height="${Math.round(320 * bgImageData.height / bgImageData.width)}" style="border-color:${color}30"></canvas>
+      <div class="canvas-label" style="color:${color}">${d.name} — detected positions</div>
+      <div style="display:flex;gap:.5rem;flex-wrap:wrap">
+        <div style="display:flex;flex-direction:column;gap:2px">
+          <span style="font-size:9px;color:#555">latest frame + detections</span>
+          <canvas id="dev-canvas-${i}" width="320" height="${h}" style="border-color:${color}30"></canvas>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:2px">
+          <span style="font-size:9px;color:#555">sum of diffs + crosshairs</span>
+          <canvas id="dev-sum-${i}"    width="320" height="${h}" style="border-color:${color}30"></canvas>
+        </div>
+      </div>
+      <div class="canvas-label" style="color:#666">${d.name} — per-LED detections</div>
+      <div id="dev-zooms-${i}" style="display:flex;flex-wrap:wrap;gap:4px"></div>
     `;
     perDevDiv.appendChild(wrap);
+    // Initialize float accumulator for diff sum
+    d.sumBuf  = new Float32Array(bgImageData.width * bgImageData.height * 4);
+    d.sumCount = 0;
   });
 
   const capDelay = parseInt(document.getElementById('cap-delay').value) || 250;
@@ -773,6 +803,13 @@ async function scanAll() {
         const diff  = subtractBackground(frame, ledBg);
         blob = findBlob(diff);
 
+        // Accumulate diff into per-device sum buffer
+        if (d.sumBuf) {
+          const src = diff.data;
+          for (let k = 0; k < d.sumBuf.length; k++) d.sumBuf[k] += src[k];
+          d.sumCount++;
+        }
+
         // Show diff on canvas (scaled)
         const diffCanvas = document.getElementById('diff-canvas');
         renderDiffWithBlob(diff, blob, diffCanvas);
@@ -781,12 +818,15 @@ async function scanAll() {
           d.detected[led.idx] = { idx: led.idx, cx: blob.cx, cy: blob.cy, brightness: blob.maxBrightness };
           // Draw blob on diff frame so crosshair is on the bright spot
           renderBlobCanvas(blob, diff);
+          // Draw zoomed crop for this LED
+          renderLedZoom(di, led.idx, diff, blob);
         } else {
           logWarn(`  ${d.name} idx ${led.idx}: no blob (max diff ${blob ? blob.maxBrightness : '?'})`);
         }
 
-        // Update per-device canvas
+        // Update per-device canvas and sum canvas
         updateDeviceCanvas(di);
+        updateDeviceSumCanvas(di);
 
       } catch(e) {
         logErr(`  Capture error at ${d.name} idx ${led.idx}: ${e.message}`);
@@ -881,6 +921,115 @@ function updateDeviceCanvas(di) {
     ctx.font = '7px monospace';
     ctx.fillText(det.idx, x + 4, y - 2);
   }
+}
+
+// ============================================================
+//  Per-device sum-of-diffs canvas (accumulated bright regions + crosshairs)
+// ============================================================
+function updateDeviceSumCanvas(di) {
+  const canvas = document.getElementById(`dev-sum-${di}`);
+  if (!canvas) return;
+  const d = devices[di];
+  if (!d.sumBuf || d.sumCount === 0) return;
+
+  const W = canvas.width, H = canvas.height;
+  const srcW = bgImageData.width, srcH = bgImageData.height;
+
+  // Build normalized ImageData from the float accumulator
+  const norm = new ImageData(srcW, srcH);
+  const dst  = norm.data;
+  // Find max value for normalization
+  let maxVal = 0;
+  for (let k = 0; k < d.sumBuf.length; k += 4) {
+    const v = d.sumBuf[k] + d.sumBuf[k+1] + d.sumBuf[k+2];
+    if (v > maxVal) maxVal = v;
+  }
+  if (maxVal === 0) return;
+  for (let k = 0; k < d.sumBuf.length; k += 4) {
+    dst[k]   = Math.min(255, (d.sumBuf[k]   / maxVal) * 255 * 3);
+    dst[k+1] = Math.min(255, (d.sumBuf[k+1] / maxVal) * 255 * 3);
+    dst[k+2] = Math.min(255, (d.sumBuf[k+2] / maxVal) * 255 * 3);
+    dst[k+3] = 255;
+  }
+
+  // Draw to sum canvas (scaled)
+  renderSmall(norm, canvas);
+
+  // Overlay crosshairs at each detected position
+  const color = DEVICE_COLORS[di % DEVICE_COLORS.length];
+  const ctx = canvas.getContext('2d');
+  const scaleX = W / srcW;
+  const scaleY = H / srcH;
+  for (const det of d.detected) {
+    if (!det) continue;
+    const x = det.cx * scaleX;
+    const y = det.cy * scaleY;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1;
+    const arm = 6;
+    ctx.beginPath();
+    ctx.moveTo(x - arm, y); ctx.lineTo(x + arm, y);
+    ctx.moveTo(x, y - arm); ctx.lineTo(x, y + arm);
+    ctx.stroke();
+    ctx.font = '7px monospace';
+    ctx.fillStyle = color;
+    ctx.fillText(det.idx, x + 4, y - 2);
+  }
+}
+
+// ============================================================
+//  Per-LED zoom canvas: tight crop of diff around detected blob
+// ============================================================
+function renderLedZoom(di, ledIdx, diff, blob) {
+  const container = document.getElementById(`dev-zooms-${di}`);
+  if (!container) return;
+
+  // Reuse existing canvas for this led index or create one
+  let canvas = document.getElementById(`led-zoom-${di}-${ledIdx}`);
+  if (!canvas) {
+    canvas = document.createElement('canvas');
+    canvas.id = `led-zoom-${di}-${ledIdx}`;
+    canvas.width  = 80;
+    canvas.height = 80;
+    canvas.title  = `LED ${ledIdx}`;
+    canvas.style.cssText = 'image-rendering:pixelated;border:1px solid #333';
+    const lbl = document.createElement('div');
+    lbl.style.cssText = 'font-size:9px;color:#666;text-align:center;margin-top:1px';
+    lbl.textContent = ledIdx;
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'display:flex;flex-direction:column;align-items:center';
+    wrap.appendChild(canvas);
+    wrap.appendChild(lbl);
+    container.appendChild(wrap);
+  }
+
+  // Crop region: ~15% of shorter dimension, centered on blob
+  const srcW = diff.width, srcH = diff.height;
+  const cropHalf = Math.round(Math.min(srcW, srcH) * 0.10);
+  const sx = Math.max(0, Math.round(blob.cx) - cropHalf);
+  const sy = Math.max(0, Math.round(blob.cy) - cropHalf);
+  const sw = Math.min(cropHalf * 2, srcW - sx);
+  const sh = Math.min(cropHalf * 2, srcH - sy);
+
+  // Render cropped diff to off-screen canvas then scale to zoom canvas
+  const tmp = document.createElement('canvas');
+  tmp.width = srcW; tmp.height = srcH;
+  tmp.getContext('2d').putImageData(diff, 0, 0);
+
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, 80, 80);
+  ctx.drawImage(tmp, sx, sy, sw, sh, 0, 0, 80, 80);
+
+  // Draw minimal red crosshair at centroid position within crop
+  const cx = (blob.cx - sx) / sw * 80;
+  const cy = (blob.cy - sy) / sh * 80;
+  ctx.strokeStyle = '#f00';
+  ctx.lineWidth = 1;
+  const arm = 6;
+  ctx.beginPath();
+  ctx.moveTo(cx - arm, cy); ctx.lineTo(cx + arm, cy);
+  ctx.moveTo(cx, cy - arm); ctx.lineTo(cx, cy + arm);
+  ctx.stroke();
 }
 
 // ============================================================
