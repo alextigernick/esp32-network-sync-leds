@@ -738,6 +738,138 @@ static esp_err_t handle_presets_set_default(httpd_req_t *req) {
     return ESP_OK;
 }
 
+// ---- /presets/clear POST -----------------------------------------------
+
+static esp_err_t handle_presets_clear(httpd_req_t *req) {
+    char query[32] = {0};
+    bool do_forward = true;
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK)
+        if (strstr(query, "fwd=0")) do_forward = false;
+
+    presets_clear();
+    if (do_forward) preset_forward("clear", "");
+
+    httpd_resp_set_status(req, "204 No Content");
+    httpd_resp_send(req, NULL, 0);
+    return ESP_OK;
+}
+
+// ---- /presets/sync POST ------------------------------------------------
+// Clears all peers' presets then pushes every local preset to each peer.
+
+static esp_err_t handle_presets_sync(httpd_req_t *req) {
+    peer_t peers[MAX_PEERS];
+    int n_peers = discovery_get_peers(peers, MAX_PEERS);
+
+    /* 1. Clear all presets on each peer */
+    static char url[80];
+    for (int p = 0; p < n_peers; p++) {
+        snprintf(url, sizeof(url), "http://%s/presets/clear?fwd=0", peers[p].ip);
+        esp_http_client_config_t cfg = {
+            .url        = url,
+            .method     = HTTP_METHOD_POST,
+            .timeout_ms = SETTINGS_HTTP_TIMEOUT_MS,
+        };
+        esp_http_client_handle_t client = esp_http_client_init(&cfg);
+        esp_http_client_set_header(client, "Content-Type",
+                                   "application/x-www-form-urlencoded");
+        esp_http_client_set_post_field(client, "", 0);
+        esp_err_t err = esp_http_client_perform(client);
+        if (err != ESP_OK)
+            ESP_LOGW(TAG, "sync clear to %s failed: %s", peers[p].ip, esp_err_to_name(err));
+        esp_http_client_cleanup(client);
+    }
+
+    /* 2. Push each local preset to all peers */
+    preset_info_t infos[PRESETS_MAX];
+    int cnt = presets_list(infos, PRESETS_MAX);
+
+    static char fwd_body[680];
+    static char enc[512];
+    for (int i = 0; i < cnt; i++) {
+        settings_t cfg;
+        if (!presets_load(infos[i].name, &cfg)) continue;
+        settings_encode(&cfg, enc, sizeof(enc));
+
+        /* URL-encode name inline — only alphanumerics and spaces are typical */
+        static char name_enc[PRESET_NAME_MAX * 3];
+        int ni = 0;
+        for (const char *s = infos[i].name; *s && ni < (int)sizeof(name_enc) - 4; s++) {
+            if ((*s >= 'A' && *s <= 'Z') || (*s >= 'a' && *s <= 'z') ||
+                (*s >= '0' && *s <= '9') || *s == '-' || *s == '_' || *s == '.') {
+                name_enc[ni++] = *s;
+            } else if (*s == ' ') {
+                name_enc[ni++] = '+';
+            } else {
+                ni += snprintf(name_enc + ni, sizeof(name_enc) - ni, "%%%02X",
+                               (unsigned char)*s);
+            }
+        }
+        name_enc[ni] = '\0';
+
+        snprintf(fwd_body, sizeof(fwd_body), "name=%s&settings=%s", name_enc, enc);
+
+        for (int p = 0; p < n_peers; p++) {
+            snprintf(url, sizeof(url), "http://%s/presets/save?fwd=0", peers[p].ip);
+            esp_http_client_config_t hcfg = {
+                .url        = url,
+                .method     = HTTP_METHOD_POST,
+                .timeout_ms = SETTINGS_HTTP_TIMEOUT_MS,
+            };
+            esp_http_client_handle_t client = esp_http_client_init(&hcfg);
+            esp_http_client_set_header(client, "Content-Type",
+                                       "application/x-www-form-urlencoded");
+            esp_http_client_set_post_field(client, fwd_body, (int)strlen(fwd_body));
+            esp_err_t err = esp_http_client_perform(client);
+            if (err != ESP_OK)
+                ESP_LOGW(TAG, "sync save '%s' to %s failed: %s",
+                         infos[i].name, peers[p].ip, esp_err_to_name(err));
+            esp_http_client_cleanup(client);
+        }
+    }
+
+    /* 3. Forward the boot-default designation */
+    char def_name[PRESET_NAME_MAX] = {0};
+    presets_get_default(def_name, sizeof(def_name));
+    /* URL-encode the default name the same way */
+    static char def_enc[PRESET_NAME_MAX * 3 + 6]; /* "name=" + encoded + NUL */
+    int di = 0;
+    di += snprintf(def_enc, sizeof(def_enc), "name=");
+    for (const char *s = def_name; *s && di < (int)sizeof(def_enc) - 4; s++) {
+        if ((*s >= 'A' && *s <= 'Z') || (*s >= 'a' && *s <= 'z') ||
+            (*s >= '0' && *s <= '9') || *s == '-' || *s == '_' || *s == '.') {
+            def_enc[di++] = *s;
+        } else if (*s == ' ') {
+            def_enc[di++] = '+';
+        } else {
+            di += snprintf(def_enc + di, sizeof(def_enc) - di, "%%%02X",
+                           (unsigned char)*s);
+        }
+    }
+    def_enc[di] = '\0';
+    for (int p = 0; p < n_peers; p++) {
+        snprintf(url, sizeof(url), "http://%s/presets/default?fwd=0", peers[p].ip);
+        esp_http_client_config_t dcfg = {
+            .url        = url,
+            .method     = HTTP_METHOD_POST,
+            .timeout_ms = SETTINGS_HTTP_TIMEOUT_MS,
+        };
+        esp_http_client_handle_t client = esp_http_client_init(&dcfg);
+        esp_http_client_set_header(client, "Content-Type",
+                                   "application/x-www-form-urlencoded");
+        esp_http_client_set_post_field(client, def_enc, (int)strlen(def_enc));
+        esp_err_t err = esp_http_client_perform(client);
+        if (err != ESP_OK)
+            ESP_LOGW(TAG, "sync default to %s failed: %s", peers[p].ip, esp_err_to_name(err));
+        esp_http_client_cleanup(client);
+    }
+
+    ESP_LOGI(TAG, "preset sync: pushed %d presets to %d peers", cnt, n_peers);
+    httpd_resp_set_status(req, "204 No Content");
+    httpd_resp_send(req, NULL, 0);
+    return ESP_OK;
+}
+
 // ---- start -------------------------------------------------------------
 
 void web_server_start(void) {
@@ -745,7 +877,7 @@ void web_server_start(void) {
     config.stack_size        = 8192;
     config.recv_wait_timeout = 30;
     config.send_wait_timeout = 10;
-    config.max_uri_handlers  = 19;
+    config.max_uri_handlers  = 21;
     config.max_open_sockets  = 5;    // leave room for discovery/time_sync/forward_task sockets
     config.lru_purge_enable  = true; // recycle oldest idle socket when at max_open_sockets
 
@@ -776,6 +908,8 @@ void web_server_start(void) {
         { .uri = "/presets/load",     .method = HTTP_POST, .handler = handle_presets_load          },
         { .uri = "/presets/delete",   .method = HTTP_POST, .handler = handle_presets_delete        },
         { .uri = "/presets/default",  .method = HTTP_POST, .handler = handle_presets_set_default   },
+        { .uri = "/presets/clear",    .method = HTTP_POST, .handler = handle_presets_clear          },
+        { .uri = "/presets/sync",     .method = HTTP_POST, .handler = handle_presets_sync           },
     };
     for (int i = 0; i < (int)(sizeof(routes)/sizeof(routes[0])); i++) {
         httpd_register_uri_handler(server, &routes[i]);

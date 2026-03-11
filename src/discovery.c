@@ -17,6 +17,14 @@
 // Announce packet format: "NAME:<name>\nIP:<ip>\nUPTIME:<ms>\n"
 #define ANNOUNCE_FMT "NAME:%s\nIP:%s\nUPTIME:%lu\n"
 
+// Peer is considered stale after missing ~2 announces; expire after ~10.
+// Stale peers get a unicast probe so multicast hiccups don't cause expiry.
+#define PEER_STALE_MS   (DISCOVERY_INTERVAL_MS * 2)
+#define PEER_EXPIRE_MS  (DISCOVERY_INTERVAL_MS * 10)
+
+// After this many consecutive recvfrom timeouts/errors, recreate the socket.
+#define LISTEN_ERROR_RESET_COUNT 60  // ~60s at 1s timeout
+
 static peer_t s_peers[MAX_PEERS];
 static int    s_peer_count = 0;
 static SemaphoreHandle_t s_mutex = NULL;
@@ -55,7 +63,7 @@ static void peer_expire(void) {
     uint32_t now = xTaskGetTickCount() * portTICK_PERIOD_MS;
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     for (int i = 0; i < s_peer_count; ) {
-        if (now - s_peers[i].last_seen_ms > DISCOVERY_INTERVAL_MS * 4) {
+        if (now - s_peers[i].last_seen_ms > PEER_EXPIRE_MS) {
             ESP_LOGI(TAG, "Peer expired: %s", s_peers[i].ip);
             s_peers[i] = s_peers[--s_peer_count];
         } else {
@@ -63,6 +71,22 @@ static void peer_expire(void) {
         }
     }
     xSemaphoreGive(s_mutex);
+}
+
+// Copy IPs of stale (but not yet expired) peers into out[]. Returns count.
+// Called from announce_task without holding the mutex.
+static int peer_get_stale_ips(char out[][16], int max) {
+    uint32_t now = xTaskGetTickCount() * portTICK_PERIOD_MS;
+    int count = 0;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    for (int i = 0; i < s_peer_count && count < max; i++) {
+        uint32_t age = now - s_peers[i].last_seen_ms;
+        if (age > PEER_STALE_MS && age <= PEER_EXPIRE_MS) {
+            strncpy(out[count++], s_peers[i].ip, 15);
+        }
+    }
+    xSemaphoreGive(s_mutex);
+    return count;
 }
 
 // ---- tasks -------------------------------------------------------------
@@ -76,27 +100,46 @@ static void announce_task(void *arg) {
     int ttl = 1;
     setsockopt(sock, IPPROTO_IP, IP_MULTICAST_TTL, &ttl, sizeof(ttl));
 
-    struct sockaddr_in dest = {
+    struct sockaddr_in mcast_dest = {
         .sin_family = AF_INET,
         .sin_port   = htons(DISCOVERY_PORT),
     };
-    inet_aton(DISCOVERY_MCAST_ADDR, &dest.sin_addr);
+    inet_aton(DISCOVERY_MCAST_ADDR, &mcast_dest.sin_addr);
 
     char buf[128];
+    // Stale IP buffer — sized conservatively; unicast only fires for stale peers
+    char stale_ips[MAX_PEERS][16];
+
     while (1) {
         uint32_t uptime_ms = (uint32_t)(esp_timer_get_time() / 1000);
         int len = snprintf(buf, sizeof(buf), ANNOUNCE_FMT, s_my_name, s_my_ip, uptime_ms);
-        sendto(sock, buf, len, 0, (struct sockaddr *)&dest, sizeof(dest));
+
+        // Always send multicast
+        sendto(sock, buf, len, 0, (struct sockaddr *)&mcast_dest, sizeof(mcast_dest));
+
+        // Unicast only to peers that have gone quiet — bypasses multicast forwarding issues.
+        // In normal operation this list is empty, so no extra traffic.
+        int stale = peer_get_stale_ips(stale_ips, MAX_PEERS);
+        if (stale > 0) {
+            struct sockaddr_in uni_dest = {
+                .sin_family = AF_INET,
+                .sin_port   = htons(DISCOVERY_PORT),
+            };
+            for (int i = 0; i < stale; i++) {
+                inet_aton(stale_ips[i], &uni_dest.sin_addr);
+                sendto(sock, buf, len, 0, (struct sockaddr *)&uni_dest, sizeof(uni_dest));
+                ESP_LOGD(TAG, "Unicast probe -> %s", stale_ips[i]);
+            }
+        }
+
         peer_expire();
         vTaskDelay(pdMS_TO_TICKS(DISCOVERY_INTERVAL_MS));
     }
 }
 
-static void listen_task(void *arg) {
-    ESP_LOGI(TAG, "listen_task started");
+static int listen_socket_create(void) {
     int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-    if (sock < 0) { ESP_LOGE(TAG, "listen socket failed"); vTaskDelete(NULL); return; }
-    ESP_LOGI(TAG, "listen socket ok");
+    if (sock < 0) { ESP_LOGE(TAG, "listen socket failed"); return -1; }
 
     int reuse = 1;
     setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
@@ -107,30 +150,46 @@ static void listen_task(void *arg) {
         .sin_addr.s_addr = htonl(INADDR_ANY),
     };
     if (bind(sock, (struct sockaddr *)&bind_addr, sizeof(bind_addr)) < 0) {
-        ESP_LOGE(TAG, "bind failed"); close(sock); vTaskDelete(NULL); return;
+        ESP_LOGE(TAG, "listen bind failed"); close(sock); return -1;
     }
-    ESP_LOGI(TAG, "listen bind ok");
 
     struct ip_mreq mreq;
     inet_aton(DISCOVERY_MCAST_ADDR, &mreq.imr_multiaddr);
     mreq.imr_interface.s_addr = htonl(INADDR_ANY);
     int join = setsockopt(sock, IPPROTO_IP, IP_ADD_MEMBERSHIP, &mreq, sizeof(mreq));
-    ESP_LOGI(TAG, "multicast join: %s", join == 0 ? "ok" : "FAILED");
+    ESP_LOGI(TAG, "listen socket ready, multicast join: %s", join == 0 ? "ok" : "FAILED");
+
+    struct timeval tv = { .tv_sec = 1, .tv_usec = 0 };
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+    return sock;
+}
+
+static void listen_task(void *arg) {
+    ESP_LOGI(TAG, "listen_task started");
+    int sock = listen_socket_create();
+    if (sock < 0) { vTaskDelete(NULL); return; }
 
     char buf[256];
     struct sockaddr_in src;
     socklen_t src_len = sizeof(src);
-
-    // Set a receive timeout so the task yields even when no packets arrive
-    struct timeval tv = { .tv_sec = 1, .tv_usec = 0 };
-    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    int error_count = 0;
 
     while (1) {
         int n = recvfrom(sock, buf, sizeof(buf) - 1, 0, (struct sockaddr *)&src, &src_len);
         if (n <= 0) {
-            vTaskDelay(pdMS_TO_TICKS(10));  // yield on timeout/error
+            vTaskDelay(pdMS_TO_TICKS(10));
+            if (++error_count >= LISTEN_ERROR_RESET_COUNT) {
+                ESP_LOGW(TAG, "listen socket stalled, recreating");
+                close(sock);
+                vTaskDelay(pdMS_TO_TICKS(500));
+                sock = listen_socket_create();
+                if (sock < 0) { vTaskDelete(NULL); return; }
+                error_count = 0;
+            }
             continue;
         }
+        error_count = 0;
         buf[n] = '\0';
 
         // Parse NAME, IP, and UPTIME fields

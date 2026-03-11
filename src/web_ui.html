@@ -78,6 +78,16 @@
     .row .val { color: #cfc; font-size: .85rem; min-width: 4rem; text-align: right; font-variant-numeric: tabular-nums; }
     .btn-flash-on  { background: #0f9; color: #000; }
     .btn-flash-off { background: #333; color: #aaa; }
+    .btn-preset-load    { background: #1a3a4a; color: #6cf; border: 1px solid #2a5a6a; }
+    .btn-preset-load:hover { background: #1f4a5e; }
+    .btn-preset-def     { background: #2a2a1a; color: #aa8; border: 1px solid #443; }
+    .btn-preset-def.active { background: #2a3a1a; color: #0f9; border-color: #3a5a2a; }
+    .btn-preset-del     { background: #2a1a1a; color: #f66; border: 1px solid #442; }
+    .btn-preset-del:hover { background: #3a1a1a; }
+    .btn-preset-save    { background: #1a2a3a; color: #8af; border: 1px solid #2a4a6a; white-space: nowrap; }
+    .btn-preset-save:hover { background: #1e3348; }
+    .btn-sync-peers     { background: #1a2a1a; color: #7d7; border: 1px solid #2a4a2a; }
+    .btn-sync-peers:hover { background: #1f3320; }
     .row input[type=range].r-track { accent-color: #f55; }
     .row input[type=range].g-track { accent-color: #5f5; }
     .row input[type=range].b-track { accent-color: #55f; }
@@ -315,9 +325,11 @@
       <div class="row" style="gap:.5rem;flex-wrap:wrap">
         <input id="preset-name-input" type="text" placeholder="Preset name"
                style="flex:1;min-width:120px;background:#1a1a1a;color:#eee;border:1px solid #333;border-radius:4px;padding:.35rem .6rem;font-size:.85rem">
-        <button onclick="presetSave()" style="white-space:nowrap">Save current</button>
+        <button class="btn-preset-save" onclick="presetSave()">Save current</button>
       </div>
       <div id="preset-list" style="margin-top:.8rem;display:flex;flex-direction:column;gap:.4rem"></div>
+      <button id="preset-sync-btn" class="btn-sync-peers" onclick="presetSync()" style="margin-top:.8rem" title="Force-push all presets to every peer — use this to catch up nodes that were offline when you last saved">↻ Force sync to all nodes</button>
+      <p style="margin:.4rem 0 0;font-size:.72rem;color:#555">Only needed for nodes that were offline when presets were saved.</p>
     </div>
 
   </div><!-- /tab-mesh -->
@@ -1285,17 +1297,21 @@
 
         const loadBtn = document.createElement('button');
         loadBtn.textContent = 'Load';
-        loadBtn.style.cssText = 'padding:.2rem .55rem;font-size:.78rem';
+        loadBtn.className = 'btn-preset-load';
+        loadBtn.style.cssText = 'padding:.2rem .55rem;font-size:.78rem;margin-top:0';
         loadBtn.onclick = () => presetLoad(p.name);
 
         const defBtn = document.createElement('button');
-        defBtn.textContent = isDefault ? '★ Default' : '☆ Default';
-        defBtn.style.cssText = 'padding:.2rem .55rem;font-size:.78rem' + (isDefault ? ';color:#0f9' : '');
+        defBtn.textContent = isDefault ? '★' : '☆';
+        defBtn.title = isDefault ? 'Boot default (click to unset)' : 'Set as boot default';
+        defBtn.className = 'btn-preset-def' + (isDefault ? ' active' : '');
+        defBtn.style.cssText = 'padding:.2rem .45rem;font-size:.78rem;margin-top:0';
         defBtn.onclick = () => presetSetDefault(isDefault ? '' : p.name);
 
         const delBtn = document.createElement('button');
         delBtn.textContent = '✕';
-        delBtn.style.cssText = 'padding:.2rem .45rem;font-size:.78rem;color:#f66';
+        delBtn.className = 'btn-preset-del';
+        delBtn.style.cssText = 'padding:.2rem .45rem;font-size:.78rem;margin-top:0';
         delBtn.onclick = () => { if (confirm('Delete preset "' + p.name + '"?')) presetDelete(p.name); };
 
         row.append(nameEl, loadBtn, defBtn, delBtn);
@@ -1340,6 +1356,18 @@
         body: 'name=' + encodeURIComponent(name)
       });
       fetchPresets();
+    }
+
+    async function presetSync() {
+      const btn = document.getElementById('preset-sync-btn');
+      btn.disabled = true;
+      btn.textContent = 'Syncing…';
+      try {
+        await fetch('/presets/sync', { method: 'POST' });
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Sync presets to all';
+      }
     }
 
     // ---- init --------------------------------------------------------------

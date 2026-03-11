@@ -219,6 +219,23 @@ void presets_apply_default(void) {
     ESP_LOGI(TAG, "applied default preset '%s'", def);
 }
 
+void presets_clear(void) {
+    nvs_handle_t h;
+    if (nvs_open(NS, NVS_READWRITE, &h) != ESP_OK) return;
+    uint8_t cnt = 0;
+    nvs_get_u8(h, "cnt", &cnt);
+    char key[4];
+    for (int i = 0; i < (int)cnt; i++) {
+        idx_key(key, 'n', i); nvs_erase_key(h, key);
+        idx_key(key, 'v', i); nvs_erase_key(h, key);
+    }
+    nvs_erase_key(h, "cnt");
+    nvs_erase_key(h, "def");
+    nvs_commit(h);
+    nvs_close(h);
+    ESP_LOGI(TAG, "cleared all presets");
+}
+
 int presets_to_json(char *buf, int buf_size) {
     preset_info_t infos[PRESETS_MAX];
     int cnt = presets_list(infos, PRESETS_MAX);

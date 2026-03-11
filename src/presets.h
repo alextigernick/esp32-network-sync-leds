@@ -30,6 +30,9 @@ bool presets_get_default(char *out, int out_size);
 /* Called once at boot: if a default preset is configured, apply it. */
 void presets_apply_default(void);
 
+/* Delete all presets (and the default). */
+void presets_clear(void);
+
 /* Serialise the full preset list as JSON into buf.
    Returns bytes written (not including null terminator). */
 int  presets_to_json(char *buf, int buf_size);
