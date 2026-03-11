@@ -150,12 +150,6 @@
 <div class="row">
   <div class="col">
     <div class="param-row">
-      <label>Width</label>
-      <input type="number" id="cam-w" value="1280" style="width:70px">
-      <label>Height</label>
-      <input type="number" id="cam-h" value="720" style="width:70px">
-    </div>
-    <div class="param-row">
       <label>Capture delay (ms)</label>
       <input type="number" id="cap-delay" value="250" style="width:70px">
       <label>Blob threshold</label>
@@ -171,8 +165,8 @@
     <button onclick="stopCamera()">Stop Camera</button>
   </div>
   <div class="col">
-    <div class="canvas-label">Live feed (downscaled preview)</div>
-    <video id="cam-video" autoplay muted playsinline width="320" height="180"></video>
+    <div class="canvas-label">Live feed (native res preview)</div>
+    <video id="cam-video" autoplay muted playsinline style="width:320px;height:auto"></video>
   </div>
 </div>
 </div>
@@ -191,7 +185,7 @@
   </div>
   <div class="col">
     <div class="canvas-label">Background frame</div>
-    <canvas id="bg-canvas" width="320" height="180"></canvas>
+    <canvas id="bg-canvas" width="320" height="240"></canvas>
   </div>
 </div>
 </div>
@@ -205,7 +199,7 @@
       Lights each LED one at a time, photographs it, and records its camera position.
     </p>
     <div class="param-row">
-      <label>Max LEDs per device (0=all)</label>
+      <label>Max LEDs per device (0=4 spatial extremes)</label>
       <input type="number" id="max-leds" value="0" style="width:60px">
     </div>
     <button onclick="scanAll()">Scan All Devices</button>
@@ -217,11 +211,11 @@
   </div>
   <div class="col">
     <div class="canvas-label">Latest diff frame (bg subtracted)</div>
-    <canvas id="diff-canvas" width="320" height="180"></canvas>
+    <canvas id="diff-canvas" width="320" height="240"></canvas>
   </div>
   <div class="col">
-    <div class="canvas-label">Detected blob (full res coords, scaled down)</div>
-    <canvas id="blob-canvas" width="320" height="180"></canvas>
+    <div class="canvas-label">Detected blob (diff frame, crosshair = centroid)</div>
+    <canvas id="blob-canvas" width="320" height="240"></canvas>
   </div>
 </div>
 </div>
@@ -252,7 +246,7 @@
 <div class="row" id="debug-canvases">
   <div>
     <div class="canvas-label">All detected positions (camera space)</div>
-    <canvas id="overlay-canvas" width="640" height="360"></canvas>
+    <canvas id="overlay-canvas" width="640" height="480"></canvas>
   </div>
   <div>
     <div class="canvas-label">World mm space (after calibration)</div>
@@ -303,6 +297,23 @@ let lastFullFrame = null;
 
 // Unique colors per device index
 const DEVICE_COLORS = ['#ff4444','#44aaff','#ffcc00','#44ff88','#ff44cc','#88ffff','#ffaa44','#aa44ff'];
+
+// ============================================================
+//  Preview canvas sizing
+// ============================================================
+const PREVIEW_W = 320;
+
+function resizePreviewCanvases(camW, camH) {
+  const h = Math.round(PREVIEW_W * camH / camW);
+  for (const id of ['bg-canvas', 'diff-canvas', 'blob-canvas']) {
+    const c = document.getElementById(id);
+    if (c) { c.width = PREVIEW_W; c.height = h; }
+  }
+  // Overlay canvas: fixed display width 640
+  const overlayH = Math.round(640 * camH / camW);
+  const oc = document.getElementById('overlay-canvas');
+  if (oc) { oc.width = 640; oc.height = overlayH; }
+}
 
 // ============================================================
 //  Logging
@@ -425,10 +436,8 @@ async function startCamera() {
     return;
   }
   try {
-    const w = parseInt(document.getElementById('cam-w').value) || 1280;
-    const h = parseInt(document.getElementById('cam-h').value) || 720;
     stream = await navigator.mediaDevices.getUserMedia({
-      video: { width: { ideal: w }, height: { ideal: h }, facingMode: 'environment' },
+      video: { facingMode: 'environment' },
       audio: false
     });
     const video = document.getElementById('cam-video');
@@ -438,6 +447,8 @@ async function startCamera() {
     const capCanvas = document.getElementById('cap-canvas');
     capCanvas.width  = video.videoWidth;
     capCanvas.height = video.videoHeight;
+    // Resize all preview canvases to match native camera aspect ratio
+    resizePreviewCanvases(video.videoWidth, video.videoHeight);
     // Hide the warning once camera works
     document.getElementById('insecure-warning').style.display = 'none';
     logOk(`Camera started: ${video.videoWidth}x${video.videoHeight}`);
@@ -679,7 +690,7 @@ async function scanAll() {
     const wrap = document.createElement('div');
     wrap.innerHTML = `
       <div class="canvas-label" style="color:${color}">${d.name} — detected LED positions</div>
-      <canvas id="dev-canvas-${i}" width="320" height="180" style="border-color:${color}30"></canvas>
+      <canvas id="dev-canvas-${i}" width="320" height="${Math.round(320 * bgImageData.height / bgImageData.width)}" style="border-color:${color}30"></canvas>
     `;
     perDevDiv.appendChild(wrap);
   });
@@ -704,7 +715,26 @@ async function scanAll() {
       }
     }
 
-    const leds = maxLeds > 0 ? d.layout.slice(0, maxLeds) : d.layout;
+    // Default (0): scan the 4 spatially-extreme LEDs (min/max X and Y position).
+    // Set > 0 to scan that many LEDs (first N by index order).
+    let leds;
+    if (maxLeds > 0) {
+      leds = d.layout.slice(0, maxLeds);
+    } else {
+      // Find LEDs at the extremes of the layout bounding box (up to 4, deduplicated)
+      const seen = new Set();
+      const extremes = [];
+      for (const fn of [
+        l => l.reduce((a, b) => b.x < a.x ? b : a),  // min X
+        l => l.reduce((a, b) => b.x > a.x ? b : a),  // max X
+        l => l.reduce((a, b) => b.y < a.y ? b : a),  // min Y
+        l => l.reduce((a, b) => b.y > a.y ? b : a),  // max Y
+      ]) {
+        const pt = fn(d.layout);
+        if (!seen.has(pt.idx)) { seen.add(pt.idx); extremes.push(pt); }
+      }
+      leds = extremes;
+    }
     d.detected = new Array(d.layout.length).fill(null);
 
     for (let li = 0; li < leds.length; li++) {
@@ -736,8 +766,8 @@ async function scanAll() {
 
         if (blob) {
           d.detected[led.idx] = { idx: led.idx, cx: blob.cx, cy: blob.cy, brightness: blob.maxBrightness };
-          // Draw blob on blob canvas
-          renderBlobCanvas(blob, frame);
+          // Draw blob on diff frame so crosshair is on the bright spot
+          renderBlobCanvas(blob, diff);
         } else {
           logWarn(`  ${d.name} idx ${led.idx}: no blob (max diff ${blob ? blob.maxBrightness : '?'})`);
         }
