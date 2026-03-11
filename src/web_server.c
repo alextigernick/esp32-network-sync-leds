@@ -954,7 +954,7 @@ static esp_err_t handle_proxy(httpd_req_t *req) {
     snprintf(url, sizeof(url), "http://%s%s", peer_ip, path_start);
 
     // Read request body (for POST)
-    static char req_body[512];
+    char req_body[512];
     int body_len = 0;
     if (req->content_len > 0) {
         body_len = req->content_len < (int)sizeof(req_body) - 1
@@ -982,16 +982,27 @@ static esp_err_t handle_proxy(httpd_req_t *req) {
         char ct[80] = {0};
         httpd_req_get_hdr_value_str(req, "Content-Type", ct, sizeof(ct));
         if (ct[0]) esp_http_client_set_header(client, "Content-Type", ct);
-        esp_http_client_set_post_field(client, req_body, body_len);
+        // Note: do NOT call set_post_field here — it only works with perform().
+        // With the open()/write()/fetch_headers() streaming API we write manually below.
     }
 
-    // Open connection and fetch headers
-    esp_err_t err = esp_http_client_open(client, body_len > 0 ? body_len : 0);
+    // Open connection — sends request line + headers (+ Content-Length: body_len for POST)
+    esp_err_t err = esp_http_client_open(client, body_len);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "proxy open %s: %s", url, esp_err_to_name(err));
         esp_http_client_cleanup(client);
         httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Proxy connect failed");
         return ESP_FAIL;
+    }
+
+    // Send POST body (set_post_field is ignored by the streaming API; must use write())
+    if (body_len > 0) {
+        if (esp_http_client_write(client, req_body, body_len) < 0) {
+            ESP_LOGW(TAG, "proxy write %s failed", url);
+            esp_http_client_cleanup(client);
+            httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Proxy write failed");
+            return ESP_FAIL;
+        }
     }
 
     int64_t content_len = esp_http_client_fetch_headers(client);
@@ -1007,7 +1018,7 @@ static esp_err_t handle_proxy(httpd_req_t *req) {
     }
 
     // Stream response body in chunks
-    static char chunk[512];
+    char chunk[512];
     int total = 0;
     int n;
     (void)content_len;
@@ -1083,7 +1094,7 @@ void web_server_start(void) {
     // Self-signed EC cert for 192.168.4.1 (the AP IP).  The calibration page is
     // always accessed from the AP; peer API calls are proxied via /fwd/{ip}{path}.
     httpd_ssl_config_t ssl_cfg        = HTTPD_SSL_CONFIG_DEFAULT();
-    ssl_cfg.httpd.stack_size          = 8192;
+    ssl_cfg.httpd.stack_size          = 16384; // proxy handler runs esp_http_client inline
     ssl_cfg.httpd.recv_wait_timeout   = 30;
     ssl_cfg.httpd.send_wait_timeout   = 10;
     ssl_cfg.httpd.max_uri_handlers    = 24;

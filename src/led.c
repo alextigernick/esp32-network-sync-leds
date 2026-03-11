@@ -295,9 +295,14 @@ void led_set_pixel(int idx)
     memset(s_pixels, 0, s_total_leds * 3);
 
     if (idx >= 0 && idx < s_total_leds) {
-        s_pixels[idx * 3 + 0] = s_g;
-        s_pixels[idx * 3 + 1] = s_r;
-        s_pixels[idx * 3 + 2] = s_b;
+        // Always use full white for probe pixels — calibration always sends
+        // r=255 g=255 b=255 via allLedsOff, but s_r/s_g/s_b are only updated
+        // by flash_task when flash_enabled=true, so rely on them being 255 here
+        // is unreliable. Full white is always correct for LED detection.
+        uint8_t bright = node_config_get_max_bright();
+        s_pixels[idx * 3 + 0] = bright;  // g channel (WS2812B GRB order)
+        s_pixels[idx * 3 + 1] = bright;  // r channel
+        s_pixels[idx * 3 + 2] = bright;  // b channel
     }
 
     transmit_all();

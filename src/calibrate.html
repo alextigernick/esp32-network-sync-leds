@@ -171,28 +171,9 @@
 </div>
 </div>
 
-<!-- ===== BACKGROUND ===== -->
-<div class="card">
-<h2>3. Background</h2>
-<div class="row">
-  <div class="col">
-    <p style="font-size:.8rem;color:#888;margin:0">
-      Turn off ALL LEDs on all devices, then capture the background frame.
-    </p>
-    <button onclick="allLedsOff()" class="warn">Turn Off All LEDs</button>
-    <button onclick="captureBackground()">Capture Background Frame</button>
-    <span id="bg-status" style="font-size:.8rem;color:#666">No background captured</span>
-  </div>
-  <div class="col">
-    <div class="canvas-label">Background frame</div>
-    <canvas id="bg-canvas" width="320" height="240"></canvas>
-  </div>
-</div>
-</div>
-
 <!-- ===== SCAN ===== -->
 <div class="card">
-<h2>4. Scan Devices</h2>
+<h2>3. Scan Devices</h2>
 <div class="row">
   <div class="col">
     <p style="font-size:.8rem;color:#888;margin:0">
@@ -222,7 +203,7 @@
 
 <!-- ===== ANALYSIS ===== -->
 <div class="card">
-<h2>5. Analysis</h2>
+<h2>4. Analysis</h2>
 <button onclick="analyzeResults()">Compute Calibration</button>
 <span style="font-size:.75rem;color:#555;margin-left:.5rem">(run after scanning all devices)</span>
 
@@ -238,7 +219,7 @@
 
 <!-- ===== DEBUG CANVASES ===== -->
 <div class="card">
-<h2>6. Debug Visualizations</h2>
+<h2>5. Debug Visualizations</h2>
 <p style="font-size:.8rem;color:#666;margin:0 0 .5rem">
   All detected LED positions overlaid on the last captured frame.
   Colors: each device gets a unique color. Circles = detected, X = local-mm layout origin.
@@ -258,7 +239,7 @@
 
 <!-- ===== UPLOAD ===== -->
 <div class="card">
-<h2>7. Upload Calibration</h2>
+<h2>6. Upload Calibration</h2>
 <div class="row">
   <div class="col">
     <p style="font-size:.8rem;color:#888;margin:0">
@@ -631,6 +612,9 @@ function renderSmall(imageData, canvas) {
 }
 
 function renderDiffWithBlob(diffData, blob, canvas) {
+  // Ensure canvas AR matches source so crosshair lands on the correct pixel.
+  const correctH = Math.round(canvas.width * diffData.height / diffData.width);
+  if (canvas.height !== correctH) canvas.height = correctH;
   const W = canvas.width, H = canvas.height;
   const scaleX = W / diffData.width;
   const scaleY = H / diffData.height;
@@ -658,7 +642,6 @@ function renderDiffWithBlob(diffData, blob, canvas) {
 // ============================================================
 async function scanAll() {
   if (!stream)       { logErr('Camera not started'); return; }
-  if (!bgImageData)  { logErr('Capture background first'); return; }
   if (devices.length === 0) { logErr('Discover devices first'); return; }
 
   scanAborted = false;
@@ -680,6 +663,14 @@ async function scanAll() {
     }
     d.detected = [];
   }
+
+  // Turn off all LEDs, wait for them to settle, then capture background
+  log('Turning off all LEDs before scan...');
+  await allLedsOff();
+  await delay(500);
+  log('Capturing background frame...');
+  bgImageData = await captureFullRes();
+  logOk(`Background captured (${bgImageData.width}x${bgImageData.height})`);
 
   // Create per-device debug canvases
   const perDevDiv = document.getElementById('per-device-canvases');
@@ -707,8 +698,21 @@ async function scanAll() {
     setDeviceStatus(di, 'scanning', '');
     log(`Scanning ${d.name} (${d.layout.length} LEDs)...`);
 
-    // Flash is already disabled mesh-wide from allLedsOff().
-    // Just make sure no other device has a stale probe pixel lit.
+    // Push mode=0/flash=0 directly to this device (fwd=0, no re-forwarding).
+    // allLedsOff() forwards via the mesh async; the peer may not have applied
+    // it yet. Posting directly ensures the device is in solid-off mode before
+    // probe pixels are set, so flash_task calls led_set(false) (which respects
+    // probe mode) rather than led_write_rgb (which clears probe mode).
+    try {
+      // fwd=0 in the query string so the peer's handler won't re-forward
+      // (body-only fwd=0 is not checked by the settings parser).
+      await postTo(d.ip, '/settings?fwd=0', 'mode=0&flash=0&r=255&g=255&b=255');
+    } catch(e) {
+      logWarn(`  ${d.name}: direct settings failed: ${e.message}`);
+    }
+    await delay(50); // wait for flash_task to switch mode (one 20ms cycle + margin)
+
+    // Clear probe pixel on all other devices.
     for (let oi = 0; oi < devices.length; oi++) {
       if (oi !== di) {
         try { await postTo(devices[oi].ip, '/led_pixel', 'idx=-1'); } catch(e) {}
@@ -747,8 +751,17 @@ async function scanAll() {
       prog.value = li / leds.length;
       label.textContent = `${d.name} — LED ${li+1}/${leds.length} (idx ${led.idx})`;
 
+      // Capture a fresh background with this LED off, right before turning it on.
+      try { await postTo(d.ip, '/led_pixel', 'idx=-1'); } catch(e) {}
+      await delay(capDelay);
+      const ledBg = await captureFullRes();
+      // Update the bg-canvas preview if it exists
+      const bgCanvasEl = document.getElementById('bg-canvas');
+      if (bgCanvasEl) renderSmall(ledBg, bgCanvasEl);
+      bgImageData = ledBg; // keep global in sync for other uses
+
       // Light up this LED
-      try { await postTo(d.ip, '/led_pixel', `idx=${led.idx}`); } catch(e) { /* ignore */ }
+      try { await postTo(d.ip, '/led_pixel', `idx=${led.idx}`); } catch(e) { logWarn(`  ${d.name} idx ${led.idx}: led_pixel failed: ${e.message}`); }
 
       await delay(capDelay);
 
@@ -757,7 +770,7 @@ async function scanAll() {
       try {
         const frame = await captureFullRes();
         lastFullFrame = frame;
-        const diff  = subtractBackground(frame, bgImageData);
+        const diff  = subtractBackground(frame, ledBg);
         blob = findBlob(diff);
 
         // Show diff on canvas (scaled)
@@ -804,12 +817,14 @@ function abortScan() {
 
 function renderBlobCanvas(blob, frame) {
   const canvas = document.getElementById('blob-canvas');
+  // Ensure canvas AR matches source so crosshair lands on the correct pixel.
+  const correctH = Math.round(canvas.width * frame.height / frame.width);
+  if (canvas.height !== correctH) canvas.height = correctH;
   const ctx = canvas.getContext('2d');
   const W = canvas.width, H = canvas.height;
   const scaleX = W / frame.width;
   const scaleY = H / frame.height;
 
-  // Draw full frame small
   renderSmall(frame, canvas);
 
   // Draw crosshair at blob
