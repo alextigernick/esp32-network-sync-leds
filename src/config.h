@@ -1,6 +1,6 @@
 #pragma once
 
-// WiFi credentials — all nodes share these
+// WiFi credentials — all nodes share these, these are defaults but are changeable in the web ui
 #define WIFI_SSID       "meshleds"
 #define WIFI_PASSWORD   "meshleds"
 
