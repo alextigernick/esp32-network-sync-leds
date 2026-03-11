@@ -165,6 +165,8 @@ static bool do_sync_burst(int sock, const char *root_ip) {
                 best_offset = offset;
             }
             good++;
+
+            if (rtt < TIME_SYNC_GOOD_RTT_US) break; // good enough, skip remaining samples
         }
 
         if (i < TIME_SYNC_SAMPLES - 1)

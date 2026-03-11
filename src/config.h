@@ -38,6 +38,9 @@
 // Gap between samples in one sync burst (ms)
 #define TIME_SYNC_SAMPLE_GAP_MS  3
 
+// Early-exit threshold: stop sampling if RTT drops below this (us)
+#define TIME_SYNC_GOOD_RTT_US  10000
+
 // EWMA weight for new offset sample (0–256, higher = faster tracking)
 // 77 ≈ 0.3 — converges in ~10 syncs, filters single-sample spikes
 #define TIME_SYNC_EWMA_ALPHA   77

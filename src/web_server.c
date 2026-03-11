@@ -1059,6 +1059,13 @@ static esp_err_t handle_wifi_config_post(httpd_req_t *req) {
                    ? req->content_len : (int)sizeof(body) - 1;
     if (recv_len > 0) httpd_req_recv(req, body, recv_len);
 
+    // Check query string for fwd=0 (peer-forwarded, don't re-forward)
+    char query[32] = {0};
+    bool do_forward = true;
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
+        if (strstr(query, "fwd=0")) do_forward = false;
+    }
+
     // Parse ssid= and pass= from URL-encoded body.
     char ssid[33] = {0};
     char pass[65] = {0};
@@ -1087,6 +1094,59 @@ static esp_err_t handle_wifi_config_post(httpd_req_t *req) {
 
     node_config_save_wifi_creds(ssid, pass);
     ESP_LOGI(TAG, "WiFi credentials updated — rebooting");
+
+    // Forward to all peers before rebooting, AP last.
+    // Order: non-AP peers → AP → self. This keeps the mesh up while all
+    // nodes receive the new credentials, regardless of which node handles
+    // the initial request.
+    if (do_forward) {
+        static char fwd_url[48];
+        peer_t peers[MAX_PEERS];
+        int n = discovery_get_peers(peers, MAX_PEERS);
+        int ap_idx = -1;
+
+        // Pass 1: forward to all non-AP peers.
+        for (int i = 0; i < n; i++) {
+            if (strcmp(peers[i].ip, AP_IP) == 0) { ap_idx = i; continue; }
+            snprintf(fwd_url, sizeof(fwd_url), "http://%s/wifi_config?fwd=0", peers[i].ip);
+            esp_http_client_config_t cfg = {
+                .url        = fwd_url,
+                .method     = HTTP_METHOD_POST,
+                .timeout_ms = SETTINGS_HTTP_TIMEOUT_MS,
+            };
+            esp_http_client_handle_t client = esp_http_client_init(&cfg);
+            esp_http_client_set_header(client, "Content-Type",
+                                       "application/x-www-form-urlencoded");
+            esp_http_client_set_post_field(client, body, (int)strlen(body));
+            esp_err_t err = esp_http_client_perform(client);
+            if (err != ESP_OK)
+                ESP_LOGW(TAG, "wifi_config fwd to %s failed: %s",
+                         peers[i].ip, esp_err_to_name(err));
+            esp_http_client_cleanup(client);
+        }
+
+        // Pass 2: forward to the AP last so it reboots after all STAs.
+        if (ap_idx >= 0) {
+            if (n > 1) vTaskDelay(pdMS_TO_TICKS(1500)); // let STAs save first
+            snprintf(fwd_url, sizeof(fwd_url), "http://%s/wifi_config?fwd=0", peers[ap_idx].ip);
+            esp_http_client_config_t cfg = {
+                .url        = fwd_url,
+                .method     = HTTP_METHOD_POST,
+                .timeout_ms = SETTINGS_HTTP_TIMEOUT_MS,
+            };
+            esp_http_client_handle_t client = esp_http_client_init(&cfg);
+            esp_http_client_set_header(client, "Content-Type",
+                                       "application/x-www-form-urlencoded");
+            esp_http_client_set_post_field(client, body, (int)strlen(body));
+            esp_err_t err = esp_http_client_perform(client);
+            if (err != ESP_OK)
+                ESP_LOGW(TAG, "wifi_config fwd to AP failed: %s", esp_err_to_name(err));
+            esp_http_client_cleanup(client);
+        }
+
+        // Give the AP time to save before we (the STA) drop off the network.
+        if (n > 0) vTaskDelay(pdMS_TO_TICKS(1500));
+    }
 
     httpd_resp_set_status(req, "204 No Content");
     httpd_resp_send(req, NULL, 0);
