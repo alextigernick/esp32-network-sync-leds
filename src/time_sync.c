@@ -180,8 +180,13 @@ static bool do_sync_burst(int sock, const char *master_ip) {
              good, TIME_SYNC_SAMPLES);
 
     if (was_first && s_first_sync_cb) {
-        s_first_sync_cb(master_ip);
+        bool fetched = s_first_sync_cb(master_ip);
         s_first_sync_cb = NULL; // fire once only
+        // If we got settings from a peer, don't apply defaults if we later win election
+        if (fetched) {
+            s_first_win     = false;
+            s_first_win_cb  = NULL;
+        }
     }
     return true;
 }
