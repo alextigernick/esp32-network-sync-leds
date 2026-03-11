@@ -188,10 +188,36 @@ void settings_apply_local(const settings_t *s) {
 // Forward task — pushes settings to each peer via HTTP POST /settings
 // ---------------------------------------------------------------------------
 
+typedef struct {
+    char url[48];
+    char body[320];
+} fwd_peer_ctx_t;
+
+static void forward_peer_task(void *arg) {
+    fwd_peer_ctx_t *ctx = (fwd_peer_ctx_t *)arg;
+
+    esp_http_client_config_t cfg = {
+        .url        = ctx->url,
+        .method     = HTTP_METHOD_POST,
+        .timeout_ms = SETTINGS_HTTP_TIMEOUT_MS,
+    };
+    esp_http_client_handle_t client = esp_http_client_init(&cfg);
+    esp_http_client_set_header(client, "Content-Type",
+                               "application/x-www-form-urlencoded");
+    esp_http_client_set_post_field(client, ctx->body, (int)strlen(ctx->body));
+
+    esp_err_t err = esp_http_client_perform(client);
+    if (err != ESP_OK)
+        ESP_LOGW(TAG, "forward to %s failed: %s", ctx->url, esp_err_to_name(err));
+
+    esp_http_client_cleanup(client);
+    free(ctx);
+    vTaskDelete(NULL);
+}
+
 static void forward_task(void *arg) {
     settings_t pending;
-    static char body[320];
-    static char url[48];
+    char body[320];
 
     for (;;) {
         if (xQueueReceive(s_forward_queue, &pending, portMAX_DELAY) != pdTRUE)
@@ -208,25 +234,18 @@ static void forward_task(void *arg) {
         int count = discovery_get_peers(peers, MAX_PEERS);
 
         for (int i = 0; i < count; i++) {
-            snprintf(url, sizeof(url), "http://%s/settings?fwd=0", peers[i].ip);
-
-            esp_http_client_config_t cfg = {
-                .url             = url,
-                .method          = HTTP_METHOD_POST,
-                .timeout_ms      = SETTINGS_HTTP_TIMEOUT_MS,
-                .skip_cert_common_name_check = true,
-            };
-            esp_http_client_handle_t client = esp_http_client_init(&cfg);
-            esp_http_client_set_header(client, "Content-Type",
-                                       "application/x-www-form-urlencoded");
-            esp_http_client_set_post_field(client, body, (int)strlen(body));
-
-            esp_err_t err = esp_http_client_perform(client);
-            if (err != ESP_OK) {
-                ESP_LOGW(TAG, "forward to %s failed: %s",
-                         peers[i].ip, esp_err_to_name(err));
+            fwd_peer_ctx_t *ctx = malloc(sizeof(fwd_peer_ctx_t));
+            if (!ctx) {
+                ESP_LOGW(TAG, "forward: out of memory for peer %s", peers[i].ip);
+                continue;
             }
-            esp_http_client_cleanup(client);
+            snprintf(ctx->url, sizeof(ctx->url), "http://%s/settings?fwd=0", peers[i].ip);
+            memcpy(ctx->body, body, sizeof(ctx->body));
+
+            if (xTaskCreate(forward_peer_task, "fwd_peer", 4096, ctx, 3, NULL) != pdPASS) {
+                ESP_LOGW(TAG, "forward: failed to create task for peer %s", peers[i].ip);
+                free(ctx);
+            }
         }
     }
 }
