@@ -35,7 +35,7 @@ pio device monitor -e seeed_xiao_esp32c3
 pio run -e seeed_xiao_esp32c3 --target upload && pio device monitor -e seeed_xiao_esp32c3
 ```
 
-All tunables (SSID, password, ports, timeouts) are in [`src/config.h`](src/config.h).
+The default WiFi credentials (`meshleds` / `meshleds`) are in [`src/config.h`](src/config.h), but can be changed at runtime via the web UI without reflashing — see [WiFi Credentials](#wifi-credentials) below.
 
 ---
 
@@ -105,6 +105,8 @@ Each node runs an HTTP server. Connect to `http://192.168.4.1/` (AP node) or any
 | `/presets` | GET/POST | Named preset management |
 | `/identify` | POST | Flash this node white for 3 s |
 | `/ota` | POST | OTA firmware update (multipart `.bin`) |
+| `/wifi_config` | GET | Current SSID as JSON (password never returned) |
+| `/wifi_config` | POST | Update WiFi credentials and reboot: `ssid=<name>&pass=<password>` |
 | `/fwd/<ip><path>` | any | AP-side proxy — forwards request to peer at `<ip>` |
 
 ---
@@ -134,6 +136,31 @@ Used by Sine and Perlin modes. Up to 4 color stops with positions [0,255] and bl
 - `1` = nearest neighbor
 - `2` = cosine smoothstep
 - `3` = step (hard boundaries)
+
+---
+
+## WiFi Credentials
+
+The default SSID and password (`meshleds` / `meshleds`) are set in [`src/config.h`](src/config.h) and compiled into the firmware. They act as a fallback — if no credentials have been saved to NVS, the firmware uses these defaults.
+
+### Changing credentials without reflashing
+
+1. Connect to the AP node at `http://192.168.4.1/`
+2. Open the **Debug** tab and scroll to **WiFi Credentials**
+3. Enter the new SSID and password, then click **Save & Reboot**
+
+The node saves the new credentials to NVS and reboots immediately. All other nodes must be updated individually (connect to each node's IP and repeat). After rebooting, every node will use the new credentials — the AP will broadcast the new SSID and STAs will try to join it.
+
+### Changing the compiled-in defaults
+
+Edit [`src/config.h`](src/config.h):
+
+```c
+#define WIFI_SSID     "your-network"
+#define WIFI_PASSWORD "your-password"
+```
+
+Then rebuild and reflash. NVS-saved credentials take precedence over these defaults, so if a node already has credentials saved you must either update them via the web UI or erase NVS with `pio run -e seeed_xiao_esp32c3 --target erase`.
 
 ---
 
