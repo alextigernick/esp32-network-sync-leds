@@ -161,6 +161,12 @@
       <label>Skip dark blobs &lt;</label>
       <input type="number" id="min-blob-bright" value="60" style="width:60px">
     </div>
+    <div class="param-row">
+      <select id="cam-select" style="background:#1a1a1a;border:1px solid #444;color:#eee;padding:.3rem .5rem;border-radius:4px;font-family:monospace;font-size:.85rem;flex:1">
+        <option value="">— click Refresh to list cameras —</option>
+      </select>
+      <button onclick="refreshCameraList()">Refresh</button>
+    </div>
     <button onclick="startCamera()">Start Camera</button>
     <button onclick="stopCamera()">Stop Camera</button>
   </div>
@@ -325,6 +331,12 @@ window.addEventListener('load', () => {
     document.getElementById('insecure-warning').style.display = '';
     document.getElementById('warn-https-url').textContent = httpsUrl;
   }
+
+  // Pre-populate camera list (labels may be blank until permission is granted)
+  refreshCameraList().catch(() => {});
+
+  // Auto-discover peers on load
+  discoverPeers();
 });
 
 // ============================================================
@@ -410,15 +422,46 @@ function setDeviceStatus(i, status, cls) {
 // ============================================================
 //  Camera
 // ============================================================
+async function refreshCameraList() {
+  if (!navigator.mediaDevices) { logErr('Camera API unavailable'); return; }
+  // Requesting a throwaway stream first forces the browser to reveal device labels
+  let tmp = null;
+  try {
+    tmp = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+  } catch(e) { /* ignore — labels may still be available if permission was granted before */ }
+  const devices = await navigator.mediaDevices.enumerateDevices();
+  if (tmp) tmp.getTracks().forEach(t => t.stop());
+  const sel = document.getElementById('cam-select');
+  sel.innerHTML = '';
+  const cams = devices.filter(d => d.kind === 'videoinput');
+  if (cams.length === 0) { sel.innerHTML = '<option>No cameras found</option>'; return; }
+  for (const cam of cams) {
+    const opt = document.createElement('option');
+    opt.value = cam.deviceId;
+    opt.textContent = cam.label || `Camera ${cam.deviceId.slice(0,8)}`;
+    sel.appendChild(opt);
+  }
+  logOk(`Found ${cams.length} camera(s)`);
+}
+
 async function startCamera() {
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
     logErr('Camera API unavailable. This page must be accessed over HTTPS or from a browser ' +
            'configured to allow camera on insecure origins. See the warning banner above.');
     return;
   }
+  // Release any existing stream first
+  if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+
+  const deviceId = document.getElementById('cam-select').value;
+  const videoConstraints = {
+    ...(deviceId ? { deviceId: { exact: deviceId } } : { facingMode: 'environment' }),
+    width:  { ideal: 4096 },
+    height: { ideal: 4096 },
+  };
   try {
     stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: 'environment' },
+      video: videoConstraints,
       audio: false
     });
     const video = document.getElementById('cam-video');
@@ -751,23 +794,31 @@ async function scanAll() {
 
     // Default (0): scan the 4 spatially-extreme LEDs (min/max X and Y position).
     // Set > 0 to scan that many LEDs (first N by index order).
-    let leds;
-    if (maxLeds > 0) {
-      leds = d.layout.slice(0, maxLeds);
-    } else {
-      // Find LEDs at the extremes of the layout bounding box (up to 4, deduplicated)
-      const seen = new Set();
-      const extremes = [];
-      for (const fn of [
-        l => l.reduce((a, b) => b.x < a.x ? b : a),  // min X
-        l => l.reduce((a, b) => b.x > a.x ? b : a),  // max X
-        l => l.reduce((a, b) => b.y < a.y ? b : a),  // min Y
-        l => l.reduce((a, b) => b.y > a.y ? b : a),  // max Y
-      ]) {
-        const pt = fn(d.layout);
-        if (!seen.has(pt.idx)) { seen.add(pt.idx); extremes.push(pt); }
+    // Always start with the 4 spatial extremes (min/max X and Y, deduplicated)
+    const seen = new Set();
+    const leds = [];
+    for (const fn of [
+      l => l.reduce((a, b) => b.x < a.x ? b : a),  // min X
+      l => l.reduce((a, b) => b.x > a.x ? b : a),  // max X
+      l => l.reduce((a, b) => b.y < a.y ? b : a),  // min Y
+      l => l.reduce((a, b) => b.y > a.y ? b : a),  // max Y
+    ]) {
+      const pt = fn(d.layout);
+      if (!seen.has(pt.idx)) { seen.add(pt.idx); leds.push(pt); }
+    }
+    if (maxLeds > leds.length) {
+      // Fill remaining slots with randomly sampled LEDs not already selected
+      const remaining = d.layout.filter(p => !seen.has(p.idx));
+      // Fisher-Yates shuffle
+      for (let i = remaining.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [remaining[i], remaining[j]] = [remaining[j], remaining[i]];
       }
-      leds = extremes;
+      for (const pt of remaining) {
+        if (leds.length >= maxLeds) break;
+        leds.push(pt);
+        seen.add(pt.idx);
+      }
     }
     d.detected = new Array(d.layout.length).fill(null);
 
