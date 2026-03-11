@@ -16,15 +16,15 @@
 #define TAG "time_sync"
 
 // ---------------------------------------------------------------------------
-// Protocol: slave sends "REQ\n", master replies with 8-byte big-endian uint64
-// containing the master's current time in MICROSECONDS.
+// Protocol: follower sends "REQ\n", root replies with 8-byte big-endian uint64
+// containing the root's current time in MICROSECONDS.
 // ---------------------------------------------------------------------------
 
 static int64_t  s_offset_us   = 0;   // applied to local esp_timer_get_time()
 static int64_t  s_last_rtt_us = -1;
 static uint32_t s_sync_count  = 0;
 static uint32_t s_fail_count  = 0;
-static char     s_role[20]    = "master";
+static char     s_role[20]    = "root";
 static bool     s_first_sync  = true;
 static TaskHandle_t s_task_handle = NULL;
 
@@ -81,12 +81,12 @@ static void apply_offset(int64_t raw_offset, int64_t rtt_us) {
 }
 
 // ---------------------------------------------------------------------------
-// Master
+// Root (time server)
 // ---------------------------------------------------------------------------
 
-static void master_task(void *arg) {
+static void root_task(void *arg) {
     int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-    if (sock < 0) { ESP_LOGE(TAG, "master socket failed"); vTaskDelete(NULL); return; }
+    if (sock < 0) { ESP_LOGE(TAG, "root socket failed"); vTaskDelete(NULL); return; }
 
     int reuse = 1;
     setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
@@ -101,7 +101,7 @@ static void master_task(void *arg) {
     struct timeval tv = { .tv_sec = 1, .tv_usec = 0 };
     setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
-    ESP_LOGI(TAG, "Master time server running (µs precision)");
+    ESP_LOGI(TAG, "Root time server running (µs precision)");
 
     char buf[16];
     struct sockaddr_in client;
@@ -121,26 +121,26 @@ static void master_task(void *arg) {
     }
 }
 
-static void start_master_task(void) {
-    xTaskCreate(master_task, "time_master", 4096, NULL, 3, &s_task_handle);
+static void start_root_task(void) {
+    xTaskCreate(root_task, "time_root", 4096, NULL, 3, &s_task_handle);
 }
 
-void time_sync_start_master(void) {
-    strncpy(s_role, "master", sizeof(s_role) - 1);
-    start_master_task();
+void time_sync_start_root(void) {
+    strncpy(s_role, "root", sizeof(s_role) - 1);
+    start_root_task();
 }
 
 // ---------------------------------------------------------------------------
-// Sync helper: burst N samples to master_ip, apply best (min-RTT) via EWMA.
+// Sync helper: burst N samples to root_ip, apply best (min-RTT) via EWMA.
 // Returns true if at least one sample succeeded.
 // ---------------------------------------------------------------------------
 
-static bool do_sync_burst(int sock, const char *master_ip) {
+static bool do_sync_burst(int sock, const char *root_ip) {
     struct sockaddr_in addr = {
         .sin_family = AF_INET,
         .sin_port   = htons(TIME_SYNC_PORT),
     };
-    inet_aton(master_ip, &addr.sin_addr);
+    inet_aton(root_ip, &addr.sin_addr);
 
     int64_t best_rtt    = INT64_MAX;
     int64_t best_offset = 0;
@@ -154,11 +154,11 @@ static bool do_sync_burst(int sock, const char *master_ip) {
         int n = recv(sock, resp, 8, 0);
 
         if (n == 8) {
-            int64_t t1      = (int64_t)esp_timer_get_time();
-            int64_t rtt     = t1 - t0;
-            int64_t master  = (int64_t)decode_us(resp);
-            // Estimate master time at the midpoint; correct for half RTT
-            int64_t offset  = master + rtt / 2 - (t0 + t1) / 2;
+            int64_t t1       = (int64_t)esp_timer_get_time();
+            int64_t rtt      = t1 - t0;
+            int64_t root_t   = (int64_t)decode_us(resp);
+            // Estimate root time at the midpoint; correct for half RTT
+            int64_t offset   = root_t + rtt / 2 - (t0 + t1) / 2;
 
             if (rtt < best_rtt) {
                 best_rtt    = rtt;
@@ -176,11 +176,11 @@ static bool do_sync_burst(int sock, const char *master_ip) {
     bool was_first = s_first_sync;
     apply_offset(best_offset, best_rtt);
     ESP_LOGI(TAG, "Synced to %s: offset=%lld us  best_rtt=%lld us  (%d/%d ok)",
-             master_ip, (long long)s_offset_us, (long long)best_rtt,
+             root_ip, (long long)s_offset_us, (long long)best_rtt,
              good, TIME_SYNC_SAMPLES);
 
     if (was_first && s_first_sync_cb) {
-        bool fetched = s_first_sync_cb(master_ip);
+        bool fetched = s_first_sync_cb(root_ip);
         s_first_sync_cb = NULL; // fire once only
         // If we got settings from a peer, don't apply defaults if we later win election
         if (fetched) {
@@ -192,35 +192,35 @@ static bool do_sync_burst(int sock, const char *master_ip) {
 }
 
 // ---------------------------------------------------------------------------
-// Slave
+// Follower
 // ---------------------------------------------------------------------------
 
-static char s_master_ip[16];
+static char s_root_ip[16];
 
-static void slave_task(void *arg) {
+static void follower_task(void *arg) {
     int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-    if (sock < 0) { ESP_LOGE(TAG, "slave socket failed"); vTaskDelete(NULL); return; }
+    if (sock < 0) { ESP_LOGE(TAG, "follower socket failed"); vTaskDelete(NULL); return; }
 
     struct timeval tv = { .tv_sec = 1, .tv_usec = 0 };
     setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 
     while (1) {
-        if (!do_sync_burst(sock, s_master_ip)) {
+        if (!do_sync_burst(sock, s_root_ip)) {
             s_fail_count++;
-            ESP_LOGW(TAG, "Time sync to %s failed", s_master_ip);
+            ESP_LOGW(TAG, "Time sync to %s failed", s_root_ip);
         }
         vTaskDelay(pdMS_TO_TICKS(TIME_SYNC_INTERVAL_MS));
     }
 }
 
-void time_sync_start_slave(const char *master_ip) {
-    strncpy(s_master_ip, master_ip, 15);
-    strncpy(s_role, "slave", sizeof(s_role) - 1);
-    xTaskCreate(slave_task, "time_slave", 4096, NULL, 3, &s_task_handle);
+void time_sync_start_follower(const char *root_ip) {
+    strncpy(s_root_ip, root_ip, 15);
+    strncpy(s_role, "follower", sizeof(s_role) - 1);
+    xTaskCreate(follower_task, "time_follower", 4096, NULL, 3, &s_task_handle);
 }
 
 // ---------------------------------------------------------------------------
-// Elected slave (leader election by lowest IP)
+// Elected mode (leader election by highest uptime, IP as tiebreaker)
 // ---------------------------------------------------------------------------
 
 static char s_my_ip[16];
@@ -229,7 +229,7 @@ static uint32_t ip_to_u32(const char *ip) {
     struct in_addr a; inet_aton(ip, &a); return ntohl(a.s_addr);
 }
 
-static void elected_slave_task(void *arg) {
+static void elected_task(void *arg) {
     int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (sock < 0) { ESP_LOGE(TAG, "elected socket failed"); vTaskDelete(NULL); return; }
 
@@ -284,7 +284,7 @@ static void elected_slave_task(void *arg) {
         snprintf(s_role, sizeof(s_role), "->%s", best_ip);
         if (!do_sync_burst(sock, best_ip)) {
             s_fail_count++;
-            ESP_LOGW(TAG, "Sync to elected master %s failed", best_ip);
+            ESP_LOGW(TAG, "Sync to elected root %s failed", best_ip);
         }
 
         vTaskDelay(pdMS_TO_TICKS(TIME_SYNC_INTERVAL_MS));
@@ -294,8 +294,8 @@ static void elected_slave_task(void *arg) {
 void time_sync_start_elected(const char *my_ip) {
     strncpy(s_my_ip, my_ip, sizeof(s_my_ip) - 1);
     strncpy(s_role, "elected", sizeof(s_role) - 1);
-    start_master_task();
-    xTaskCreate(elected_slave_task, "time_elected", 4096, NULL, 3, &s_task_handle);
+    start_root_task();
+    xTaskCreate(elected_task, "time_elected", 4096, NULL, 3, &s_task_handle);
 }
 
 uint32_t time_sync_get_stack_hwm(void) {

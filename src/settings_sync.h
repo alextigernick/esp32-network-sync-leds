@@ -45,6 +45,10 @@ typedef struct {
     uint8_t  pal_blend;     // 0=linear, 1=nearest, 2=cosine, 3=step
 } settings_t;
 
+// Initialize settings mutex, forward queue, and forward task.
+// Must be called before any other settings function.
+void settings_sync_init(void);
+
 // Return a snapshot of current settings.
 void settings_get(settings_t *out);
 
@@ -65,16 +69,5 @@ void settings_encode(const settings_t *s, char *buf, int buf_size);
 // Returns true on success.  Call once on STA boot before starting tasks.
 bool settings_fetch_from_peer(const char *peer_ip);
 
-// Blank all LEDs and pause rendering (use during OTA to avoid glitches/power spikes).
-void settings_ota_blackout(bool enable);
-
-// Start the LED flash task.  Call once after GPIO is configured.
-void settings_start_flash_task(void);
-
-// Briefly flash all LEDs white on this node for duration_ms (local only).
-void settings_identify(uint32_t duration_ms);
-
-// Diagnostic counters updated by the flash task.
-uint32_t settings_get_frame_count(void);
-uint32_t settings_get_flash_stack_hwm(void); // words remaining
-uint32_t settings_get_fwd_stack_hwm(void);   // words remaining
+// Forwarding task stack diagnostic (FreeRTOS words remaining).
+uint32_t settings_get_fwd_stack_hwm(void);

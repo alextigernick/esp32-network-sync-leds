@@ -2,15 +2,15 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-// Start master role: serve time to requesting nodes
-void time_sync_start_master(void);
+// Start root role: serve time to requesting nodes
+void time_sync_start_root(void);
 
-// Start slave role: periodically request time from master_ip
-void time_sync_start_slave(const char *master_ip);
+// Start follower role: periodically request time from root_ip
+void time_sync_start_follower(const char *root_ip);
 
 // Start elected mode (for STA nodes when AP may not be an ESP32 node).
-// Runs the master server AND a slave that each cycle elects the lowest-IP
-// node (from AP_IP + discovered peers + self) as the time reference.
+// Runs the root server AND an election task that each cycle elects the
+// longest-uptime node (from discovered peers + self) as the time reference.
 // If self is elected, no offset is applied (this node is the root).
 void time_sync_start_elected(const char *my_ip);
 
@@ -22,7 +22,7 @@ typedef struct {
     int64_t  last_rtt_us; // RTT of last successful sync round-trip (-1 if never synced)
     uint32_t sync_count;  // total successful syncs
     uint32_t fail_count;  // total failed sync attempts
-    char     role[20];    // "master", "slave", "root", or "->x.x.x.x"
+    char     role[20];    // "root", "follower", "elected", or "->x.x.x.x"
 } time_sync_debug_t;
 
 // Fill *out with current debug state

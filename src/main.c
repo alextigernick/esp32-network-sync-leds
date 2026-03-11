@@ -5,6 +5,7 @@
 #include "time_sync.h"
 #include "presets.h"
 #include "settings_sync.h"
+#include "renderer.h"
 #include "web_server.h"
 
 #include <string.h>
@@ -180,16 +181,17 @@ void app_main(void) {
     }
     ESP_LOGI(TAG, "Node name: %s", s_my_name);
 
-    // Init settings mutex, LED driver, and flash task before any task that
-    // might call settings_get() (e.g. presets_apply_default via first_win_cb).
-    settings_start_flash_task();
+    // Init settings state before any task that might call settings_get()
+    // (e.g. presets_apply_default via first_win_cb), then start renderer.
+    settings_sync_init();
+    renderer_start();
 
     if (is_sta) {
         time_sync_set_first_sync_cb(settings_fetch_from_peer);
         time_sync_set_first_win_cb(presets_apply_default);
         time_sync_start_elected(s_my_ip);
     } else {
-        time_sync_start_master();
+        time_sync_start_root();
     }
 
     ESP_LOGI(TAG, "Starting discovery...");

@@ -10,7 +10,7 @@
  *     { "led": bool,
  *       "sync_ms": uint64,
  *       "ota_pending": bool,
- *       "ts_role": "master"|"slave",
+ *       "ts_role": "root"|"follower"|"elected"|"->x.x.x.x",
  *       "ts_offset_us": int64,
  *       "ts_rtt_us": int64,
  *       "ts_sync_count": uint32,
@@ -87,6 +87,7 @@
 #include "presets.h"
 #include "time_sync.h"
 #include "settings_sync.h"
+#include "renderer.h"
 #include "config.h"
 
 #include <string.h>
@@ -155,8 +156,8 @@ static esp_err_t handle_state(httpd_req_t *req) {
 
     uint32_t uptime_ms = (uint32_t)(esp_timer_get_time() / 1000);
     uint32_t free_heap        = esp_get_free_heap_size();
-    uint32_t frame_count      = settings_get_frame_count();
-    uint32_t hwm_render       = settings_get_flash_stack_hwm();
+    uint32_t frame_count      = renderer_get_frame_count();
+    uint32_t hwm_render       = renderer_get_stack_hwm();
     uint32_t hwm_fwd          = settings_get_fwd_stack_hwm();
     uint32_t hwm_web          = uxTaskGetStackHighWaterMark(NULL);
     uint32_t hwm_time         = time_sync_get_stack_hwm();
@@ -259,7 +260,7 @@ static esp_err_t handle_led_post(httpd_req_t *req) {
 static esp_err_t handle_ota_post(httpd_req_t *req) {
     // Blank LEDs for the entire OTA write to reduce power draw and avoid glitches.
     // flash_task would otherwise keep overwriting any single-frame blackout.
-    settings_ota_blackout(true);
+    renderer_set_ota_blackout(true);
 
     esp_ota_handle_t ota_handle;
     const esp_partition_t *update_part = esp_ota_get_next_update_partition(NULL);
@@ -522,7 +523,7 @@ static esp_err_t handle_node_config_post(httpd_req_t *req) {
 // ---- /identify POST ----------------------------------------------------
 
 static esp_err_t handle_identify(httpd_req_t *req) {
-    settings_identify(3000);  // flash white for 3 s on this node only
+    renderer_identify(3000);  // flash white for 3 s on this node only
     httpd_resp_set_status(req, "204 No Content");
     httpd_resp_send(req, NULL, 0);
     return ESP_OK;
