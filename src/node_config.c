@@ -5,6 +5,7 @@
 #include "nvs_flash.h"
 #include "esp_log.h"
 #include <string.h>
+#include <stdbool.h>
 
 #define TAG "node_cfg"
 #define NS  "node_cfg"
@@ -22,6 +23,7 @@ static float    s_layout_y_mm   = 0.0f;
 static float    s_layout_rot    = 0.0f; // degrees
 static char     s_wifi_ssid[33] = {0};
 static char     s_wifi_pass[65] = {0};
+static bool     s_never_ap      = false;
 
 void node_config_load(void) {
     nvs_handle_t h;
@@ -61,6 +63,10 @@ void node_config_load(void) {
     nvs_get_str(h, "wifi_ssid", s_wifi_ssid, &ssid_len);
     size_t pass_len = sizeof(s_wifi_pass);
     nvs_get_str(h, "wifi_pass", s_wifi_pass, &pass_len);
+
+    uint8_t never_ap = 0;
+    if (nvs_get_u8(h, "never_ap", &never_ap) == ESP_OK)
+        s_never_ap = never_ap != 0;
 
     nvs_close(h);
 
@@ -181,6 +187,24 @@ void node_config_get_wifi_pass(char *out, size_t len) {
     else
         strncpy(out, WIFI_PASSWORD, len - 1);
     out[len - 1] = '\0';
+}
+
+bool node_config_get_never_ap(void) {
+    return s_never_ap;
+}
+
+void node_config_save_never_ap(bool v) {
+    s_never_ap = v;
+
+    nvs_handle_t h;
+    if (nvs_open(NS, NVS_READWRITE, &h) != ESP_OK) {
+        ESP_LOGE(TAG, "nvs_open failed");
+        return;
+    }
+    nvs_set_u8(h, "never_ap", v ? 1 : 0);
+    nvs_commit(h);
+    nvs_close(h);
+    ESP_LOGI(TAG, "saved: never_ap=%d", (int)v);
 }
 
 void node_config_save_wifi_creds(const char *ssid, const char *pass) {

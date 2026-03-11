@@ -370,6 +370,11 @@
         <span style="color:#888;font-size:.8rem;margin-left:.3rem">°</span>
         <span style="color:#666;font-size:.75rem;margin-left:.6rem">applied after translation</span>
       </div>
+      <div class="row" style="margin-top:.5rem">
+        <label>Never host AP</label>
+        <input type="checkbox" id="never-ap-inp" style="width:1.1rem;height:1.1rem;accent-color:#4af">
+        <span style="color:#888;font-size:.8rem;margin-left:.3rem">poor antenna / always STA only</span>
+      </div>
       <button class="btn-off" style="margin-top:.6rem" onclick="saveNodeConfig()">Save</button>
     </div>
 
@@ -494,7 +499,8 @@
     <div class="card">
       <h2>WiFi Credentials</h2>
       <div class="row"><label>SSID</label><input id="wifi-ssid" type="text" maxlength="32" placeholder="network name"></div>
-      <div class="row"><label>Password</label><input id="wifi-pass" type="password" maxlength="64" placeholder="(unchanged if blank)"></div>
+      <div class="row"><label>Password</label><input id="wifi-pass" type="text" maxlength="64" placeholder="password"></div>
+      <div class="row"><label>Confirm</label><input id="wifi-pass2" type="text" maxlength="64" placeholder="re-enter password"></div>
       <button class="btn-on" onclick="saveWifi()">Save &amp; Reboot</button>
       <span id="wifi-status" style="margin-left:8px;font-size:0.85em"></span>
     </div>
@@ -1044,10 +1050,14 @@
     }
 
     async function saveWifi() {
-      const ssid = document.getElementById('wifi-ssid').value.trim();
-      const pass = document.getElementById('wifi-pass').value;
-      const st   = document.getElementById('wifi-status');
-      if (!ssid) { st.textContent = 'SSID required'; return; }
+      const ssid  = document.getElementById('wifi-ssid').value.trim();
+      const pass  = document.getElementById('wifi-pass').value;
+      const pass2 = document.getElementById('wifi-pass2').value;
+      const st    = document.getElementById('wifi-status');
+      if (!ssid)         { st.textContent = 'SSID required'; st.style.color='#f66'; return; }
+      if (!pass)         { st.textContent = 'Password required'; st.style.color='#f66'; return; }
+      if (pass !== pass2){ st.textContent = 'Passwords do not match'; st.style.color='#f66'; return; }
+      st.style.color = '';
       const body = 'ssid=' + encodeURIComponent(ssid) + '&pass=' + encodeURIComponent(pass);
       const r = await fetch('/wifi_config', {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body});
       if (r.ok) {
@@ -1096,6 +1106,7 @@
         document.getElementById('layout-x-inp').value   = s.layout_x   ?? 0;
         document.getElementById('layout-y-inp').value   = s.layout_y   ?? 0;
         document.getElementById('layout-rot-inp').value = s.layout_rot ?? 0;
+        document.getElementById('never-ap-inp').checked = s.never_ap   ?? false;
       } catch (e) { console.warn('node_config fetch failed', e); }
     }
 
@@ -1112,8 +1123,10 @@
       const lx  = document.getElementById('layout-x-inp').value;
       const ly  = document.getElementById('layout-y-inp').value;
       const lr  = document.getElementById('layout-rot-inp').value;
+      const neverAp = document.getElementById('never-ap-inp').checked ? 1 : 0;
       let body = 'max_bright=' + mb + '&ct_bias=' + ct
-               + '&layout_x=' + lx + '&layout_y=' + ly + '&layout_rot=' + lr;
+               + '&layout_x=' + lx + '&layout_y=' + ly + '&layout_rot=' + lr
+               + '&never_ap=' + neverAp;
 
       // Collect per-strip fields
       let i = 0;

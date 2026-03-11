@@ -2,6 +2,8 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <stdbool.h>
+
 #include "config.h"
 
 // Per-strip configuration (GPIO pin and LED count).
@@ -43,3 +45,8 @@ void     node_config_save_layout_transform(float x_mm, float y_mm, float rot_deg
 void     node_config_get_wifi_ssid(char *out, size_t len);
 void     node_config_get_wifi_pass(char *out, size_t len);
 void     node_config_save_wifi_creds(const char *ssid, const char *pass);
+
+// If true, this node will never become the AP even if no AP is found.
+// Use for nodes with poor reception that shouldn't host the network.
+bool     node_config_get_never_ap(void);
+void     node_config_save_never_ap(bool v);

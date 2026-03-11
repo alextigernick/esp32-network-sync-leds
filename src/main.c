@@ -142,6 +142,20 @@ static bool wifi_connect_or_become_ap(void) {
         return true;  // joined as STA
     }
 
+    // If this node is configured to never host the AP, keep retrying indefinitely.
+    if (node_config_get_never_ap()) {
+        ESP_LOGW(TAG, "never_ap set — retrying STA forever, not becoming AP");
+        while (true) {
+            s_connect_attempts = 0;
+            xEventGroupClearBits(s_wifi_events, WIFI_FAIL_BIT);
+            esp_wifi_connect();
+            bits = xEventGroupWaitBits(s_wifi_events,
+                                       WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
+                                       false, false, portMAX_DELAY);
+            if (bits & WIFI_CONNECTED_BIT) return true;
+        }
+    }
+
     // No AP found — stop STA and come up as AP instead
     ESP_ERROR_CHECK(esp_wifi_stop());
     ESP_ERROR_CHECK(esp_wifi_deinit());
@@ -177,6 +191,9 @@ void app_main(void) {
     }
 
     node_config_load();
+    // TEMPORARY: reset WiFi creds to compile-time defaults on every boot.
+    // Remove once devices are accessible via web UI.
+    // node_config_save_wifi_creds("", "");
     pixel_layout_load();
 
     ESP_ERROR_CHECK(esp_netif_init());

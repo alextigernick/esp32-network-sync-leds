@@ -427,12 +427,14 @@ static esp_err_t handle_node_config_get(httpd_req_t *req) {
     pos += snprintf(buf + pos, sizeof(buf) - pos,
                     "{\"num_leds\":%u,\"max_bright\":%u,\"ct_bias\":%d"
                     ",\"layout_x\":%.2f,\"layout_y\":%.2f,\"layout_rot\":%.2f"
+                    ",\"never_ap\":%s"
                     ",\"strips\":[",
                     node_config_get_num_leds(), node_config_get_max_bright(),
                     (int)node_config_get_ct_bias(),
                     node_config_get_layout_x_offset(),
                     node_config_get_layout_y_offset(),
-                    node_config_get_layout_rotation());
+                    node_config_get_layout_rotation(),
+                    node_config_get_never_ap() ? "true" : "false");
     for (int i = 0; i < strip_count; i++) {
         pos += snprintf(buf + pos, sizeof(buf) - pos,
                         "%s{\"gpio\":%u,\"num_leds\":%u}",
@@ -485,6 +487,12 @@ static esp_err_t handle_node_config_post(httpd_req_t *req) {
     if (p) {
         int8_t v = (int8_t)strtol(p + 8, NULL, 10);
         node_config_save_ct_bias(v);
+        changed = true;
+    }
+    p = strstr(body, "never_ap=");
+    if (p) {
+        bool v = strtoul(p + 9, NULL, 10) != 0;
+        node_config_save_never_ap(v);
         changed = true;
     }
 
