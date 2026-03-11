@@ -490,6 +490,15 @@
       <button class="btn-verify" onclick="verify()">Verify &amp; Cancel Rollback</button>
     </div>
 
+    <!-- WiFi credentials -->
+    <div class="card">
+      <h2>WiFi Credentials</h2>
+      <div class="row"><label>SSID</label><input id="wifi-ssid" type="text" maxlength="32" placeholder="network name"></div>
+      <div class="row"><label>Password</label><input id="wifi-pass" type="password" maxlength="64" placeholder="(unchanged if blank)"></div>
+      <button class="btn-on" onclick="saveWifi()">Save &amp; Reboot</button>
+      <span id="wifi-status" style="margin-left:8px;font-size:0.85em"></span>
+    </div>
+
   </div><!-- /tab-debug -->
 
   <script>
@@ -1023,6 +1032,32 @@
       await fetchState();
     }
 
+    // ---- wifi config -------------------------------------------------------
+
+    async function fetchWifiConfig() {
+      try {
+        const r = await fetch('/wifi_config');
+        if (!r.ok) return;
+        const s = await r.json();
+        document.getElementById('wifi-ssid').value = s.ssid || '';
+      } catch (e) {}
+    }
+
+    async function saveWifi() {
+      const ssid = document.getElementById('wifi-ssid').value.trim();
+      const pass = document.getElementById('wifi-pass').value;
+      const st   = document.getElementById('wifi-status');
+      if (!ssid) { st.textContent = 'SSID required'; return; }
+      const body = 'ssid=' + encodeURIComponent(ssid) + '&pass=' + encodeURIComponent(pass);
+      const r = await fetch('/wifi_config', {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body});
+      if (r.ok) {
+        st.textContent = 'Saved — rebooting…';
+        setTimeout(() => location.reload(), 8000);
+      } else {
+        st.textContent = 'Error ' + r.status;
+      }
+    }
+
     // ---- node config -------------------------------------------------------
 
     async function fetchNodeConfig() {
@@ -1401,6 +1436,7 @@
     fetchState();
     fetchNodeConfig().then(fetchAndRenderLayout);
     fetchPresets();
+    fetchWifiConfig();
     setInterval(fetchState, 3000);
   </script>
 </body>

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdint.h>
+#include <stddef.h>
 #include "config.h"
 
 // Per-strip configuration (GPIO pin and LED count).
@@ -36,3 +37,9 @@ float    node_config_get_layout_x_offset(void);   // mm
 float    node_config_get_layout_y_offset(void);   // mm
 float    node_config_get_layout_rotation(void);   // degrees
 void     node_config_save_layout_transform(float x_mm, float y_mm, float rot_deg);
+
+// WiFi credentials (override compile-time defaults).
+// Buffers must be at least 33 bytes (SSID) and 65 bytes (password).
+void     node_config_get_wifi_ssid(char *out, size_t len);
+void     node_config_get_wifi_pass(char *out, size_t len);
+void     node_config_save_wifi_creds(const char *ssid, const char *pass);

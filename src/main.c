@@ -78,23 +78,25 @@ static void become_ap(void) {
 
     esp_netif_create_default_wifi_ap();
 
-    wifi_config_t ap_cfg = {
-        .ap = {
-            .ssid           = WIFI_SSID,
-            .password       = WIFI_PASSWORD,
-            .ssid_len       = strlen(WIFI_SSID),
-            .channel        = 1,
-            .max_connection = 8,
-            .authmode       = WIFI_AUTH_WPA2_PSK,
-        },
-    };
+    char ssid[33], pass[65];
+    node_config_get_wifi_ssid(ssid, sizeof(ssid));
+    node_config_get_wifi_pass(pass, sizeof(pass));
+
+    wifi_config_t ap_cfg = { .ap = {
+        .channel        = 1,
+        .max_connection = 8,
+        .authmode       = WIFI_AUTH_WPA2_PSK,
+    }};
+    strncpy((char *)ap_cfg.ap.ssid,     ssid, sizeof(ap_cfg.ap.ssid));
+    strncpy((char *)ap_cfg.ap.password, pass, sizeof(ap_cfg.ap.password));
+    ap_cfg.ap.ssid_len = strlen(ssid);
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap_cfg));
     ESP_ERROR_CHECK(esp_wifi_start());
 
     strncpy(s_my_ip, AP_IP, sizeof(s_my_ip) - 1);
-    ESP_LOGI(TAG, "AP ready. SSID='%s'  IP=%s", WIFI_SSID, s_my_ip);
+    ESP_LOGI(TAG, "AP ready. SSID='%s'  IP=%s", ssid, s_my_ip);
 }
 
 // ---- try to join existing network, fall back to AP --------------------
@@ -103,18 +105,19 @@ static bool wifi_connect_or_become_ap(void) {
     esp_netif_create_default_wifi_sta();
     wifi_driver_init();
 
-    wifi_config_t sta_cfg = {
-        .sta = {
-            .ssid     = WIFI_SSID,
-            .password = WIFI_PASSWORD,
-        },
-    };
+    char ssid[33], pass[65];
+    node_config_get_wifi_ssid(ssid, sizeof(ssid));
+    node_config_get_wifi_pass(pass, sizeof(pass));
+
+    wifi_config_t sta_cfg = { .sta = {} };
+    strncpy((char *)sta_cfg.sta.ssid,     ssid, sizeof(sta_cfg.sta.ssid));
+    strncpy((char *)sta_cfg.sta.password, pass, sizeof(sta_cfg.sta.password));
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &sta_cfg));
     ESP_ERROR_CHECK(esp_wifi_start());
 
-    ESP_LOGI(TAG, "Scanning for '%s'...", WIFI_SSID);
+    ESP_LOGI(TAG, "Scanning for '%s'...", ssid);
 
     EventBits_t bits = xEventGroupWaitBits(s_wifi_events,
                                            WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,

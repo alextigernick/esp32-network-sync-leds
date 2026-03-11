@@ -1036,6 +1036,67 @@ static esp_err_t handle_proxy(httpd_req_t *req) {
     return ESP_OK;
 }
 
+// ---- /wifi_config GET --------------------------------------------------
+
+static esp_err_t handle_wifi_config_get(httpd_req_t *req) {
+    add_cors(req);
+    char ssid[33];
+    node_config_get_wifi_ssid(ssid, sizeof(ssid));
+    // Never send the password back — return only the SSID.
+    static char buf[80];
+    int len = snprintf(buf, sizeof(buf), "{\"ssid\":\"%s\"}", ssid);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_send(req, buf, len);
+    return ESP_OK;
+}
+
+// ---- /wifi_config POST -------------------------------------------------
+
+static esp_err_t handle_wifi_config_post(httpd_req_t *req) {
+    add_cors(req);
+    char body[160] = {0};
+    int recv_len = req->content_len < (int)sizeof(body) - 1
+                   ? req->content_len : (int)sizeof(body) - 1;
+    if (recv_len > 0) httpd_req_recv(req, body, recv_len);
+
+    // Parse ssid= and pass= from URL-encoded body.
+    char ssid[33] = {0};
+    char pass[65] = {0};
+
+    char *ps = strstr(body, "ssid=");
+    if (ps) {
+        ps += 5;
+        char *end = strchr(ps, '&');
+        size_t n = end ? (size_t)(end - ps) : strlen(ps);
+        if (n >= sizeof(ssid)) n = sizeof(ssid) - 1;
+        memcpy(ssid, ps, n);
+    }
+    char *pp = strstr(body, "pass=");
+    if (pp) {
+        pp += 5;
+        char *end = strchr(pp, '&');
+        size_t n = end ? (size_t)(end - pp) : strlen(pp);
+        if (n >= sizeof(pass)) n = sizeof(pass) - 1;
+        memcpy(pass, pp, n);
+    }
+
+    if (ssid[0] == '\0') {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "ssid required");
+        return ESP_OK;
+    }
+
+    node_config_save_wifi_creds(ssid, pass);
+    ESP_LOGI(TAG, "WiFi credentials updated — rebooting");
+
+    httpd_resp_set_status(req, "204 No Content");
+    httpd_resp_send(req, NULL, 0);
+
+    // Reboot after a short delay so the HTTP response is delivered first.
+    vTaskDelay(pdMS_TO_TICKS(500));
+    esp_restart();
+    return ESP_OK;
+}
+
 // ---- start -------------------------------------------------------------
 
 // Register all URI handlers on a given httpd instance.
@@ -1062,6 +1123,8 @@ static void register_routes(httpd_handle_t server) {
         { .uri = "/presets/default",  .method = HTTP_POST, .handler = handle_presets_set_default   },
         { .uri = "/presets/clear",    .method = HTTP_POST, .handler = handle_presets_clear         },
         { .uri = "/presets/sync",     .method = HTTP_POST, .handler = handle_presets_sync          },
+        { .uri = "/wifi_config",  .method = HTTP_GET,  .handler = handle_wifi_config_get  },
+        { .uri = "/wifi_config",  .method = HTTP_POST, .handler = handle_wifi_config_post },
         // Proxy: forwards calibration tool requests to peer devices over HTTP.
         // Must use wildcard matching — set uri_match_fn = httpd_uri_match_wildcard.
         { .uri = "/fwd/*",  .method = HTTP_GET,  .handler = handle_proxy },
@@ -1078,7 +1141,7 @@ void web_server_start(void) {
     http_cfg.stack_size        = 8192;
     http_cfg.recv_wait_timeout = 30;
     http_cfg.send_wait_timeout = 10;
-    http_cfg.max_uri_handlers  = 24; // routes + 2 proxy wildcard entries
+    http_cfg.max_uri_handlers  = 26; // routes + 2 proxy wildcard entries
     http_cfg.max_open_sockets  = 4;
     http_cfg.lru_purge_enable  = true;
     http_cfg.uri_match_fn      = httpd_uri_match_wildcard;
@@ -1098,7 +1161,7 @@ void web_server_start(void) {
     ssl_cfg.httpd.stack_size          = 16384; // proxy handler runs esp_http_client inline
     ssl_cfg.httpd.recv_wait_timeout   = 30;
     ssl_cfg.httpd.send_wait_timeout   = 10;
-    ssl_cfg.httpd.max_uri_handlers    = 24;
+    ssl_cfg.httpd.max_uri_handlers    = 26;
     ssl_cfg.httpd.max_open_sockets    = 3; // TLS sessions are memory-hungry; 3 is enough
     ssl_cfg.httpd.lru_purge_enable    = true;
     ssl_cfg.httpd.uri_match_fn        = httpd_uri_match_wildcard;

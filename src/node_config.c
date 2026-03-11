@@ -4,6 +4,7 @@
 #include "nvs.h"
 #include "nvs_flash.h"
 #include "esp_log.h"
+#include <string.h>
 
 #define TAG "node_cfg"
 #define NS  "node_cfg"
@@ -19,6 +20,8 @@ static int8_t   s_ct_bias       = 0;
 static float    s_layout_x_mm   = 0.0f;
 static float    s_layout_y_mm   = 0.0f;
 static float    s_layout_rot    = 0.0f; // degrees
+static char     s_wifi_ssid[33] = {0};
+static char     s_wifi_pass[65] = {0};
 
 void node_config_load(void) {
     nvs_handle_t h;
@@ -53,6 +56,11 @@ void node_config_load(void) {
         memcpy(&s_layout_y_mm, &fraw, 4);
     if (nvs_get_u32(h, "lay_rot", &fraw) == ESP_OK)
         memcpy(&s_layout_rot, &fraw, 4);
+
+    size_t ssid_len = sizeof(s_wifi_ssid);
+    nvs_get_str(h, "wifi_ssid", s_wifi_ssid, &ssid_len);
+    size_t pass_len = sizeof(s_wifi_pass);
+    nvs_get_str(h, "wifi_pass", s_wifi_pass, &pass_len);
 
     nvs_close(h);
 
@@ -157,4 +165,38 @@ void node_config_save_layout_transform(float x_mm, float y_mm, float rot_deg) {
     nvs_commit(h);
     nvs_close(h);
     ESP_LOGI(TAG, "saved: layout_transform x=%.1f y=%.1f rot=%.1f", x_mm, y_mm, rot_deg);
+}
+
+void node_config_get_wifi_ssid(char *out, size_t len) {
+    if (s_wifi_ssid[0])
+        strncpy(out, s_wifi_ssid, len - 1);
+    else
+        strncpy(out, WIFI_SSID, len - 1);
+    out[len - 1] = '\0';
+}
+
+void node_config_get_wifi_pass(char *out, size_t len) {
+    if (s_wifi_pass[0])
+        strncpy(out, s_wifi_pass, len - 1);
+    else
+        strncpy(out, WIFI_PASSWORD, len - 1);
+    out[len - 1] = '\0';
+}
+
+void node_config_save_wifi_creds(const char *ssid, const char *pass) {
+    strncpy(s_wifi_ssid, ssid, sizeof(s_wifi_ssid) - 1);
+    s_wifi_ssid[sizeof(s_wifi_ssid) - 1] = '\0';
+    strncpy(s_wifi_pass, pass, sizeof(s_wifi_pass) - 1);
+    s_wifi_pass[sizeof(s_wifi_pass) - 1] = '\0';
+
+    nvs_handle_t h;
+    if (nvs_open(NS, NVS_READWRITE, &h) != ESP_OK) {
+        ESP_LOGE(TAG, "nvs_open failed");
+        return;
+    }
+    nvs_set_str(h, "wifi_ssid", s_wifi_ssid);
+    nvs_set_str(h, "wifi_pass", s_wifi_pass);
+    nvs_commit(h);
+    nvs_close(h);
+    ESP_LOGI(TAG, "saved: wifi_ssid=%s", s_wifi_ssid);
 }
