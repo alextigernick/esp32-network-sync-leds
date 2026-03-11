@@ -395,12 +395,17 @@ static esp_err_t handle_node_config_get(httpd_req_t *req) {
     int strip_count;
     node_config_get_strips(strips, &strip_count);
 
-    static char buf[256];
+    static char buf[320];
     int pos = 0;
     pos += snprintf(buf + pos, sizeof(buf) - pos,
-                    "{\"num_leds\":%u,\"max_bright\":%u,\"ct_bias\":%d,\"strips\":[",
+                    "{\"num_leds\":%u,\"max_bright\":%u,\"ct_bias\":%d"
+                    ",\"layout_x\":%.2f,\"layout_y\":%.2f,\"layout_rot\":%.2f"
+                    ",\"strips\":[",
                     node_config_get_num_leds(), node_config_get_max_bright(),
-                    (int)node_config_get_ct_bias());
+                    (int)node_config_get_ct_bias(),
+                    node_config_get_layout_x_offset(),
+                    node_config_get_layout_y_offset(),
+                    node_config_get_layout_rotation());
     for (int i = 0; i < strip_count; i++) {
         pos += snprintf(buf + pos, sizeof(buf) - pos,
                         "%s{\"gpio\":%u,\"num_leds\":%u}",
@@ -454,6 +459,24 @@ static esp_err_t handle_node_config_post(httpd_req_t *req) {
         node_config_save_ct_bias(v);
         changed = true;
     }
+
+    bool layout_transform_changed = false;
+    char *px = strstr(body, "layout_x=");
+    char *py = strstr(body, "layout_y=");
+    char *pr = strstr(body, "layout_rot=");
+    if (px || py || pr) {
+        float x   = node_config_get_layout_x_offset();
+        float y   = node_config_get_layout_y_offset();
+        float rot = node_config_get_layout_rotation();
+        if (px) x   = strtof(px + 9,   NULL);
+        if (py) y   = strtof(py + 9,   NULL);
+        if (pr) rot = strtof(pr + 11,  NULL);
+        node_config_save_layout_transform(x, y, rot);
+        pixel_layout_load();
+        changed = true;
+        layout_transform_changed = true;
+    }
+    (void)layout_transform_changed;
 
     if (!changed) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Missing node config field");

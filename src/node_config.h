@@ -28,3 +28,11 @@ void     node_config_save_max_bright(uint8_t v);
 // Per-device color temperature bias (-100=cool, 0=neutral, +100=warm).
 int8_t   node_config_get_ct_bias(void);
 void     node_config_save_ct_bias(int8_t v);
+
+// Per-device pixel layout transform.
+// x/y offsets in mm, rotation in degrees.
+// Applied at load time: each pixel is translated then rotated around the origin.
+float    node_config_get_layout_x_offset(void);   // mm
+float    node_config_get_layout_y_offset(void);   // mm
+float    node_config_get_layout_rotation(void);   // degrees
+void     node_config_save_layout_transform(float x_mm, float y_mm, float rot_deg);

@@ -1,10 +1,12 @@
 #include "pixel_layout.h"
+#include "node_config.h"
 #include "config.h"
 #include "esp_log.h"
 
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <math.h>
 
 #define TAG  "pixel_layout"
 #define PATH "/spiffs/pixel_layout.csv"
@@ -42,16 +44,26 @@ void pixel_layout_load(void) {
         float yf = strtof(p, NULL);
 
         if (idx >= 0 && idx < MAX_LEDS) {
+            // Apply layout transform: translate then rotate around origin
+            float tx  = xf + node_config_get_layout_x_offset();
+            float ty  = yf + node_config_get_layout_y_offset();
+            float rot = node_config_get_layout_rotation() * (float)M_PI / 180.0f;
+            float rx  = tx * cosf(rot) - ty * sinf(rot);
+            float ry  = tx * sinf(rot) + ty * cosf(rot);
+
             // Store as 0.1 mm units (round to nearest)
-            s_pos[idx].x  = (int16_t)(xf * 10.0f + (xf >= 0 ? 0.5f : -0.5f));
-            s_pos[idx].y  = (int16_t)(yf * 10.0f + (yf >= 0 ? 0.5f : -0.5f));
+            s_pos[idx].x  = (int16_t)(rx * 10.0f + (rx >= 0 ? 0.5f : -0.5f));
+            s_pos[idx].y  = (int16_t)(ry * 10.0f + (ry >= 0 ? 0.5f : -0.5f));
             s_valid[idx]  = true;
             if (idx + 1 > s_count) s_count = idx + 1;
             loaded++;
         }
     }
     fclose(f);
-    ESP_LOGI(TAG, "loaded %d positions (s_count=%d)", loaded, s_count);
+    ESP_LOGI(TAG, "loaded %d positions (s_count=%d) with offset=(%.1f,%.1f) rot=%.1f°",
+             loaded, s_count,
+             node_config_get_layout_x_offset(), node_config_get_layout_y_offset(),
+             node_config_get_layout_rotation());
 }
 
 bool pixel_layout_get(int idx, int16_t *x, int16_t *y) {

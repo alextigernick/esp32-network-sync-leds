@@ -44,7 +44,8 @@ All nodes run identical firmware. On boot, each node attempts to join the WiFi n
 | `src/web_server.c/h` | ESP-IDF `esp_http_server`. GET `/` serves control page; POST `/led` toggles GPIO 20; POST `/ota` accepts multipart firmware upload and reboots. GET/POST `/settings` for synchronized settings. GET `/state` returns JSON with full state including mode, pattern params, palette, and peers. |
 | `src/settings_sync.c/h` | Synchronized settings. `settings_t` holds all shared state; `settings_apply_and_forward()` applies locally then pushes to all peers via HTTP POST `/settings?fwd=0`. `flash_task` runs at 10 ms resolution driving WS2812B strip for all modes. |
 | `src/led.c/h` | WS2812B strip driver via RMT. `led_set(bool)` uniform color, `led_set_pixel(int)` probe mode, `led_write_rgb(const uint8_t*, int)` per-pixel RGB buffer. |
-| `src/pixel_layout.c/h` | Per-node pixel position map loaded from `/spiffs/pixel_layout.csv` (index, x_mm, y_mm). `pixel_layout_get(i, &x, &y)` used by pattern renderer. |
+| `src/pixel_layout.c/h` | Per-node pixel position map loaded from `/spiffs/pixel_layout.csv` (index, x_mm, y_mm). At load time, applies the per-device layout transform (X/Y offset + rotation) from `node_config`. `pixel_layout_get(i, &x, &y)` used by pattern renderer. |
+| `src/node_config.c/h` | Per-device persistent config stored in NVS (`node_cfg` namespace). Holds strip GPIO/LED counts, max brightness, color temp bias, and pixel layout transform (X offset mm, Y offset mm, rotation °). Layout transform is applied at `pixel_layout_load()` time using `sinf`/`cosf`. |
 | `src/perlin.c/h` | Pure-C fixed-point Perlin noise (16.16 format). `perlin_sample(x_mm, y_mm, time_s, scale_mm, speed, octaves)` returns [0,255] via fBm with normalization by geometric amplitude sum. |
 
 ### Key design decisions

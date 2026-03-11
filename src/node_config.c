@@ -14,8 +14,11 @@ static strip_cfg_t s_strips[MAX_STRIPS] = {
     { .gpio = 255, .num_leds = 0 },
     { .gpio = 255, .num_leds = 0 },
 };
-static uint8_t s_max_bright = 255;
-static int8_t  s_ct_bias    = 0;
+static uint8_t  s_max_bright    = 255;
+static int8_t   s_ct_bias       = 0;
+static float    s_layout_x_mm   = 0.0f;
+static float    s_layout_y_mm   = 0.0f;
+static float    s_layout_rot    = 0.0f; // degrees
 
 void node_config_load(void) {
     nvs_handle_t h;
@@ -42,6 +45,14 @@ void node_config_load(void) {
     int8_t ct;
     if (nvs_get_i8(h, "ct_bias", &ct) == ESP_OK)
         s_ct_bias = ct;
+
+    uint32_t fraw;
+    if (nvs_get_u32(h, "lay_x", &fraw) == ESP_OK)
+        memcpy(&s_layout_x_mm, &fraw, 4);
+    if (nvs_get_u32(h, "lay_y", &fraw) == ESP_OK)
+        memcpy(&s_layout_y_mm, &fraw, 4);
+    if (nvs_get_u32(h, "lay_rot", &fraw) == ESP_OK)
+        memcpy(&s_layout_rot, &fraw, 4);
 
     nvs_close(h);
 
@@ -123,4 +134,27 @@ void node_config_save_max_bright(uint8_t v) {
     nvs_commit(h);
     nvs_close(h);
     ESP_LOGI(TAG, "saved: max_bright=%u", v);
+}
+
+float node_config_get_layout_x_offset(void) { return s_layout_x_mm; }
+float node_config_get_layout_y_offset(void) { return s_layout_y_mm; }
+float node_config_get_layout_rotation(void) { return s_layout_rot; }
+
+void node_config_save_layout_transform(float x_mm, float y_mm, float rot_deg) {
+    s_layout_x_mm = x_mm;
+    s_layout_y_mm = y_mm;
+    s_layout_rot  = rot_deg;
+
+    nvs_handle_t h;
+    if (nvs_open(NS, NVS_READWRITE, &h) != ESP_OK) {
+        ESP_LOGE(TAG, "nvs_open failed");
+        return;
+    }
+    uint32_t fraw;
+    memcpy(&fraw, &x_mm,   4); nvs_set_u32(h, "lay_x",   fraw);
+    memcpy(&fraw, &y_mm,   4); nvs_set_u32(h, "lay_y",   fraw);
+    memcpy(&fraw, &rot_deg,4); nvs_set_u32(h, "lay_rot", fraw);
+    nvs_commit(h);
+    nvs_close(h);
+    ESP_LOGI(TAG, "saved: layout_transform x=%.1f y=%.1f rot=%.1f", x_mm, y_mm, rot_deg);
 }
