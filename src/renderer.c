@@ -361,20 +361,39 @@ static void render_task(void *arg) {
 
                 case MODE_SPARKLE: {
                     // Per-pixel independent twinkle.
-                    // Active set re-randomises each period so the same pixels
-                    // don't always light up (epoch mixes pixel index with time).
-                    uint32_t period = cur.period_ms > 0 ? cur.period_ms : 1000;
-                    uint32_t epoch  = time_ms / period;
-                    uint32_t h32    = ((uint32_t)(i + 1) ^ (epoch * 1664525u + 1013904223u)) * 2654435761u;
+                    //
+                    // Each pixel runs its own phase-shifted sine wave.  The
+                    // active/inactive decision re-rolls once per period, but only
+                    // at the pixel's OWN zero crossing — exactly when brightness
+                    // is already 0 — so there is never a visible jump.
+                    //
+                    // Waveform: 0 → peak → 0 over one period (LUT offset by 192
+                    // so the trough aligns with the epoch boundary).
+                    uint32_t period   = cur.period_ms > 0 ? cur.period_ms : 1000;
+
+                    // Fixed per-pixel phase offset — spreads zero crossings across
+                    // the period so the active set refreshes gradually, not all at once.
+                    uint32_t ph32 = (uint32_t)(i + 1) * 2246822519u;
+                    ph32 ^= ph32 >> 16;
+                    uint8_t phase_off = (uint8_t)(ph32 >> 8);
+
+                    // Pixel's own clock: shift by phase offset so each pixel's
+                    // epoch boundary (zero crossing) falls at a different time.
+                    uint32_t t_px     = time_ms + (uint32_t)phase_off * period / 256;
+                    uint32_t px_epoch = t_px / period;
+                    uint32_t px_pos   = t_px % period;
+
+                    // Active/inactive re-rolls only at the epoch boundary (bri = 0).
+                    uint32_t h32 = ((uint32_t)(i + 1) ^
+                                    (px_epoch * 1664525u + 1013904223u)) * 2654435761u;
                     h32 ^= h32 >> 16;
-                    uint8_t h = (uint8_t)(h32 >> 8);
-                    if (h >= cur.sparkle_density) {
-                        s_t_buf[i] = 0;
+
+                    if ((uint8_t)(h32 >> 8) < cur.sparkle_density) {
+                        // +192 shifts so lut[0+192]=0 (trough), giving 0→peak→0 envelope.
+                        uint8_t lut_idx = (uint8_t)(px_pos * 256 / period) + 192;
+                        s_t_buf[i] = s_sin_lut[lut_idx];
                     } else {
-                        // Phase offset from a second hash so peaks are not synchronised
-                        uint8_t h2    = (uint8_t)(h32 >> 16);
-                        uint32_t phase = (time_ms % period + (uint32_t)h2 * period / 256) % period;
-                        s_t_buf[i]    = s_sin_lut[(uint8_t)(phase * 256 / period)];
+                        s_t_buf[i] = 0;
                     }
                     break;
                 }
