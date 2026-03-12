@@ -154,6 +154,7 @@
       transition: color .15s, border-color .15s;
     }
     .tab-btn:hover { color: #ccc; }
+    a.tab-btn { text-decoration: none; display: flex; align-items: center; justify-content: center; }
     .tab-btn.active { color: #0f9; border-bottom-color: #0f9; }
     .tab-panel { display: none; flex-direction: column; align-items: center; gap: 1.2rem; width: 100%; }
     .tab-panel.active { display: flex; }
@@ -166,6 +167,7 @@
     <button class="tab-btn active" onclick="switchTab('mesh')">Mesh Control</button>
     <button class="tab-btn"        onclick="switchTab('device')">Device Config</button>
     <button class="tab-btn"        onclick="switchTab('debug')">Debug</button>
+    <a class="tab-btn" id="calibrate-link" href="#">Calibrate Mesh Offsets</a>
   </nav>
 
   <!-- ===== TAB: Mesh Control ===== -->
@@ -644,6 +646,9 @@
   </div><!-- /tab-debug -->
 
   <script>
+    document.getElementById('calibrate-link').href =
+      'https://' + location.hostname + '/calibrate';
+
     // ---- tabs --------------------------------------------------------------
 
     function switchTab(name) {
