@@ -183,7 +183,12 @@
       <select id="mode-sel" oninput="onModeChange()">
         <option value="0">Synchronized Flash</option>
         <option value="1">Sine Wave</option>
-        <option value="2">Perlin Noise</option>
+        <option value="noise">Noise</option>
+        <option value="4">Ripple</option>
+        <option value="5" style="color:#777">Spiral</option>
+        <option value="6">Sparkle</option>
+        <option value="8">Standing Wave</option>
+        <option value="9" style="color:#777">Fan</option>
       </select>
     </div>
 
@@ -248,9 +253,18 @@
       </div>
     </div>
 
-    <!-- Perlin noise (mode 2) -->
+    <!-- Noise (modes 2 / 3 / 7) -->
     <div class="card" id="panel-perlin" style="display:none">
-      <h2>Perlin Noise</h2>
+      <h2 id="noise-panel-title">Noise</h2>
+      <div class="row">
+        <label>Pattern</label>
+        <select id="noise-type-sel" onchange="onNoiseTypeChange()"
+                style="flex:1;padding:.3rem .4rem;background:#282828;color:#eee;border:1px solid #444;border-radius:6px;font-family:monospace;font-size:.85rem">
+          <option value="2">Perlin fBm</option>
+          <option value="3">Plasma</option>
+          <option value="7" style="color:#777">Domain Warp</option>
+        </select>
+      </div>
       <div class="row">
         <label>Scale</label>
         <input type="range" id="perlin-scale-sl" min="10" max="10000" step="10" value="1000"
@@ -263,15 +277,137 @@
                oninput="updateSliderLabel('perlin-speed-sl','perlin-speed-val',v=>(v/400).toFixed(3)+' u/s'); scheduleSettingsPush()">
         <span class="val" id="perlin-speed-val">1.000 u/s</span>
       </div>
-      <div class="row">
+      <div class="row" id="noise-octaves-row">
         <label>Octaves</label>
         <input type="range" id="perlin-oct-sl" min="1" max="8" step="1" value="3"
                oninput="updateSliderLabel('perlin-oct-sl','perlin-oct-val',v=>v); scheduleSettingsPush()">
         <span class="val" id="perlin-oct-val">3</span>
       </div>
+      <div class="row" id="noise-warp-row" style="display:none">
+        <label>Strength</label>
+        <input type="range" id="warpst-sl" min="0" max="255" step="1" value="128"
+               oninput="updateSliderLabel('warpst-sl','warpst-val',v=>Math.round(v/2.55)+'%'); scheduleSettingsPush()">
+        <span class="val" id="warpst-val">50%</span>
+      </div>
     </div>
 
-    <!-- Shared palette (modes 1 & 2) -->
+    <!-- Ripple (mode 4) -->
+    <div class="card" id="panel-ripple" style="display:none">
+      <h2>Ripple</h2>
+      <div class="row">
+        <label>Center X</label>
+        <input type="range" id="ripple-cx-sl" min="-5000" max="5000" step="10" value="0"
+               oninput="updateSliderLabel('ripple-cx-sl','ripple-cx-val',v=>(v/10).toFixed(0)+' mm'); scheduleSettingsPush()">
+        <span class="val" id="ripple-cx-val">0 mm</span>
+      </div>
+      <div class="row">
+        <label>Center Y</label>
+        <input type="range" id="ripple-cy-sl" min="-5000" max="5000" step="10" value="0"
+               oninput="updateSliderLabel('ripple-cy-sl','ripple-cy-val',v=>(v/10).toFixed(0)+' mm'); scheduleSettingsPush()">
+        <span class="val" id="ripple-cy-val">0 mm</span>
+      </div>
+      <div class="row">
+        <label>Wavelength</label>
+        <input type="range" id="ripple-period-sl" min="10" max="10000" step="10" value="1000"
+               oninput="updateSliderLabel('ripple-period-sl','ripple-period-val',v=>(v/10).toFixed(1)+' mm'); scheduleSettingsPush()">
+        <span class="val" id="ripple-period-val">100.0 mm</span>
+      </div>
+      <div class="row">
+        <label>Speed</label>
+        <input type="range" id="ripple-speed-sl" min="-1000" max="1000" step="1" value="100"
+               oninput="updateSliderLabel('ripple-speed-sl','ripple-speed-val',v=>(v/100).toFixed(2)+' Hz'); scheduleSettingsPush()">
+        <span class="val" id="ripple-speed-val">1.00 Hz</span>
+      </div>
+    </div>
+
+    <!-- Spiral (mode 5) -->
+    <div class="card" id="panel-spiral" style="display:none">
+      <h2>Spiral</h2>
+      <div class="row">
+        <label>Center X</label>
+        <input type="range" id="spiral-cx-sl" min="-5000" max="5000" step="10" value="0"
+               oninput="updateSliderLabel('spiral-cx-sl','spiral-cx-val',v=>(v/10).toFixed(0)+' mm'); scheduleSettingsPush()">
+        <span class="val" id="spiral-cx-val">0 mm</span>
+      </div>
+      <div class="row">
+        <label>Center Y</label>
+        <input type="range" id="spiral-cy-sl" min="-5000" max="5000" step="10" value="0"
+               oninput="updateSliderLabel('spiral-cy-sl','spiral-cy-val',v=>(v/10).toFixed(0)+' mm'); scheduleSettingsPush()">
+        <span class="val" id="spiral-cy-val">0 mm</span>
+      </div>
+      <div class="row">
+        <label>Arms</label>
+        <input type="range" id="spiral-arms-sl" min="1" max="8" step="1" value="2"
+               oninput="updateSliderLabel('spiral-arms-sl','spiral-arms-val',v=>v); scheduleSettingsPush()">
+        <span class="val" id="spiral-arms-val">2</span>
+      </div>
+      <div class="row">
+        <label>Pitch</label>
+        <input type="range" id="spiral-pitch-sl" min="10" max="10000" step="10" value="1000"
+               oninput="updateSliderLabel('spiral-pitch-sl','spiral-pitch-val',v=>(v/10).toFixed(1)+' mm'); scheduleSettingsPush()">
+        <span class="val" id="spiral-pitch-val">100.0 mm</span>
+      </div>
+      <div class="row">
+        <label>Speed</label>
+        <input type="range" id="spiral-speed-sl" min="-1000" max="1000" step="1" value="100"
+               oninput="updateSliderLabel('spiral-speed-sl','spiral-speed-val',v=>(v/100).toFixed(2)+' Hz'); scheduleSettingsPush()">
+        <span class="val" id="spiral-speed-val">1.00 Hz</span>
+      </div>
+    </div>
+
+    <!-- Sparkle (mode 6) -->
+    <div class="card" id="panel-sparkle" style="display:none">
+      <h2>Sparkle</h2>
+      <div class="row">
+        <label>Density</label>
+        <input type="range" id="sparkd-sl" min="0" max="255" step="1" value="128"
+               oninput="updateSliderLabel('sparkd-sl','sparkd-val',v=>Math.round(v/2.55)+'%'); scheduleSettingsPush()">
+        <span class="val" id="sparkd-val">50%</span>
+      </div>
+      <div class="row">
+        <label>Period</label>
+        <input type="range" id="sparkle-period-sl" min="100" max="10000" step="100" value="1000"
+               oninput="updateSliderLabel('sparkle-period-sl','sparkle-period-val',v=>(v/1000).toFixed(1)+'s'); scheduleSettingsPush()">
+        <span class="val" id="sparkle-period-val">1.0s</span>
+      </div>
+    </div>
+
+    <!-- Fan / Voronoi (mode 9) -->
+    <div class="card" id="panel-voronoi" style="display:none">
+      <h2>Fan</h2>
+      <div class="row">
+        <label>Center X</label>
+        <input type="range" id="voronoi-cx-sl" min="-5000" max="5000" step="10" value="0"
+               oninput="updateSliderLabel('voronoi-cx-sl','voronoi-cx-val',v=>(v/10).toFixed(0)+' mm'); scheduleSettingsPush()">
+        <span class="val" id="voronoi-cx-val">0 mm</span>
+      </div>
+      <div class="row">
+        <label>Center Y</label>
+        <input type="range" id="voronoi-cy-sl" min="-5000" max="5000" step="10" value="0"
+               oninput="updateSliderLabel('voronoi-cy-sl','voronoi-cy-val',v=>(v/10).toFixed(0)+' mm'); scheduleSettingsPush()">
+        <span class="val" id="voronoi-cy-val">0 mm</span>
+      </div>
+      <div class="row">
+        <label>Seeds</label>
+        <input type="range" id="nseeds-sl" min="2" max="8" step="1" value="4"
+               oninput="updateSliderLabel('nseeds-sl','nseeds-val',v=>v); scheduleSettingsPush()">
+        <span class="val" id="nseeds-val">4</span>
+      </div>
+      <div class="row">
+        <label>Orbit</label>
+        <input type="range" id="voronoi-orbit-sl" min="10" max="5000" step="10" value="1000"
+               oninput="updateSliderLabel('voronoi-orbit-sl','voronoi-orbit-val',v=>(v/10).toFixed(1)+' mm'); scheduleSettingsPush()">
+        <span class="val" id="voronoi-orbit-val">100.0 mm</span>
+      </div>
+      <div class="row">
+        <label>Speed</label>
+        <input type="range" id="voronoi-speed-sl" min="0" max="1000" step="1" value="400"
+               oninput="updateSliderLabel('voronoi-speed-sl','voronoi-speed-val',v=>(v/400).toFixed(3)+' u/s'); scheduleSettingsPush()">
+        <span class="val" id="voronoi-speed-val">1.000 u/s</span>
+      </div>
+    </div>
+
+    <!-- Shared palette (modes 1–9) -->
     <div class="card" id="panel-palette" style="display:none">
       <h2>Color Palette</h2>
       <div class="row" style="margin-bottom:.4rem">
@@ -533,12 +669,50 @@
       document.getElementById(labelId).textContent = fmt(v);
     }
 
+    // Noise sub-type panel title
+    const NOISE_NAMES = {2: 'Perlin Noise', 3: 'Plasma', 7: 'Domain Warp'};
+
+    // Returns the actual numeric mode (0–9) regardless of primary/sub selector state.
+    function getEffectiveMode() {
+      const v = document.getElementById('mode-sel').value;
+      if (v === 'noise') return +document.getElementById('noise-type-sel').value;
+      return +v;
+    }
+
+    // Update noise-panel sub-controls: gray octaves for Plasma, show warp row only for Warp.
+    function updateNoiseSubUI(mode) {
+      const octRow  = document.getElementById('noise-octaves-row');
+      const warpRow = document.getElementById('noise-warp-row');
+      const octSlider = document.getElementById('perlin-oct-sl');
+      const isPlasma  = mode === 3;
+      octRow.style.opacity         = isPlasma ? '0.35' : '';
+      octSlider.disabled           = isPlasma;
+      warpRow.style.display        = mode === 7 ? '' : 'none';
+    }
+
+    const ALL_PANELS = ['panel-flash','panel-sine','panel-perlin',
+                        'panel-ripple','panel-spiral','panel-sparkle','panel-voronoi','panel-palette'];
+    function showPanelsForMode(mode) {
+      ALL_PANELS.forEach(id => document.getElementById(id).style.display = 'none');
+      if (mode === 0) { document.getElementById('panel-flash').style.display = ''; return; }
+      document.getElementById('panel-palette').style.display = '';
+      if (mode === 1 || mode === 8) document.getElementById('panel-sine').style.display    = '';
+      if (mode === 2 || mode === 3 || mode === 7) {
+        document.getElementById('panel-perlin').style.display = '';
+        document.getElementById('noise-panel-title').textContent = NOISE_NAMES[mode] || 'Noise';
+        updateNoiseSubUI(mode);
+      }
+      if (mode === 4)  document.getElementById('panel-ripple').style.display  = '';
+      if (mode === 5)  document.getElementById('panel-spiral').style.display  = '';
+      if (mode === 6)  document.getElementById('panel-sparkle').style.display = '';
+      if (mode === 9)  document.getElementById('panel-voronoi').style.display = '';
+    }
+    function onNoiseTypeChange() {
+      showPanelsForMode(getEffectiveMode());
+      scheduleSettingsPush();
+    }
     function onModeChange() {
-      const mode = +document.getElementById('mode-sel').value;
-      document.getElementById('panel-flash').style.display   = mode === 0 ? '' : 'none';
-      document.getElementById('panel-sine').style.display    = mode === 1 ? '' : 'none';
-      document.getElementById('panel-perlin').style.display  = mode === 2 ? '' : 'none';
-      document.getElementById('panel-palette').style.display = mode >= 1 ? '' : 'none';
+      showPanelsForMode(getEffectiveMode());
       scheduleSettingsPush();
     }
 
@@ -808,20 +982,42 @@
     }
 
     async function pushSettings(forward = true) {
-      const mode   = +document.getElementById('mode-sel').value;
+      const mode   = getEffectiveMode();
       const flash  = document.getElementById('flash-btn').dataset.enabled === '1' ? 1 : 0;
-      const period = document.getElementById('period-sl').value;
-      const duty   = document.getElementById('duty-sl').value;
       const r      = document.getElementById('r-sl').value;
       const g      = document.getElementById('g-sl').value;
       const b      = document.getElementById('b-sl').value;
-      const speriod = document.getElementById('sine-period-sl').value;
-      const sangle  = document.getElementById('sine-angle-sl').value;
-      const sspeed  = document.getElementById('sine-speed-sl').value;
-      const pscale  = document.getElementById('perlin-scale-sl').value;
-      const pspeed  = document.getElementById('perlin-speed-sl').value;
-      const poct    = document.getElementById('perlin-oct-sl').value;
-      // Palette (all 4 slots always sent; unused slots default to 0)
+
+      // period_ms: flash period for modes 0/1/2/3/7/8/9; sparkle period for mode 6
+      const period = mode === 6
+        ? document.getElementById('sparkle-period-sl').value
+        : document.getElementById('period-sl').value;
+      const duty   = document.getElementById('duty-sl').value;
+
+      // speriod / sspeed / sangle: sine panel for modes 1 & 8; ripple for 4; spiral for 5
+      let speriod = document.getElementById('sine-period-sl').value;
+      let sspeed  = document.getElementById('sine-speed-sl').value;
+      const sangle = document.getElementById('sine-angle-sl').value;
+      if (mode === 4) { speriod = document.getElementById('ripple-period-sl').value;  sspeed = document.getElementById('ripple-speed-sl').value; }
+      if (mode === 5) { speriod = document.getElementById('spiral-pitch-sl').value;   sspeed = document.getElementById('spiral-speed-sl').value; }
+
+      // pscale / pspeed: perlin panel for modes 2/3/7; voronoi for 9
+      let pscale = document.getElementById('perlin-scale-sl').value;
+      let pspeed = document.getElementById('perlin-speed-sl').value;
+      const poct = document.getElementById('perlin-oct-sl').value;
+      if (mode === 9) { pscale = document.getElementById('voronoi-orbit-sl').value;   pspeed = document.getElementById('voronoi-speed-sl').value; }
+
+      // cx / cy / new params
+      let cx = 0, cy = 0;
+      if (mode === 4) { cx = document.getElementById('ripple-cx-sl').value;   cy = document.getElementById('ripple-cy-sl').value; }
+      if (mode === 5) { cx = document.getElementById('spiral-cx-sl').value;   cy = document.getElementById('spiral-cy-sl').value; }
+      if (mode === 9) { cx = document.getElementById('voronoi-cx-sl').value;  cy = document.getElementById('voronoi-cy-sl').value; }
+      const narms  = document.getElementById('spiral-arms-sl').value;
+      const sparkd = document.getElementById('sparkd-sl').value;
+      const warpst = document.getElementById('warpst-sl').value;
+      const nseeds = document.getElementById('nseeds-sl').value;
+
+      // Palette (all 4 slots always sent)
       const pc  = palStops.length;
       const pbr = document.getElementById('pal-bright-sl').value;
       const pbl = document.getElementById('pal-blend-sel').value;
@@ -836,7 +1032,8 @@
         headers: {'Content-Type': 'application/x-www-form-urlencoded'},
         body: `flash=${flash}&period=${period}&duty=${duty}&r=${r}&g=${g}&b=${b}`
             + `&mode=${mode}&speriod=${speriod}&sangle=${sangle}&sspeed=${sspeed}`
-            + `&pscale=${pscale}&pspeed=${pspeed}&poct=${poct}${palStr}`,
+            + `&pscale=${pscale}&pspeed=${pspeed}&poct=${poct}${palStr}`
+            + `&cx=${cx}&cy=${cy}&narms=${narms}&sparkd=${sparkd}&warpst=${warpst}&nseeds=${nseeds}`,
       });
     }
 
@@ -900,13 +1097,18 @@
 
         // Mode selector
         if (s.mode !== undefined) {
-          const modeSel = document.getElementById('mode-sel');
-          if (document.activeElement !== modeSel) {
-            modeSel.value = s.mode;
-            document.getElementById('panel-flash').style.display   = s.mode === 0 ? '' : 'none';
-            document.getElementById('panel-sine').style.display    = s.mode === 1 ? '' : 'none';
-            document.getElementById('panel-perlin').style.display  = s.mode === 2 ? '' : 'none';
-            document.getElementById('panel-palette').style.display = s.mode >= 1 ? '' : 'none';
+          const modeSel     = document.getElementById('mode-sel');
+          const noiseSel    = document.getElementById('noise-type-sel');
+          const noiseActive = document.activeElement === modeSel || document.activeElement === noiseSel;
+          if (!noiseActive) {
+            const m = s.mode;
+            if (m === 2 || m === 3 || m === 7) {
+              modeSel.value  = 'noise';
+              noiseSel.value = m;
+            } else {
+              modeSel.value  = m;
+            }
+            showPanelsForMode(m);
           }
         }
 
@@ -956,6 +1158,63 @@
             document.getElementById('sine-speed-sl').value = s.sine_speed_c100;
             document.getElementById('sine-speed-val').textContent = (s.sine_speed_c100 / 100).toFixed(2) + ' Hz';
           }
+        }
+
+        // New pattern params
+        if (s.cx_mm10 !== undefined) {
+          const ids = ['ripple-cx-sl','spiral-cx-sl','voronoi-cx-sl'];
+          const active = ids.includes(document.activeElement.id);
+          if (!active) {
+            const fmt = v => (v/10).toFixed(0)+' mm';
+            ids.forEach(id => { document.getElementById(id).value = s.cx_mm10; document.getElementById(id.replace('-sl','-val')).textContent = fmt(s.cx_mm10); });
+            const idy = ['ripple-cy-sl','spiral-cy-sl','voronoi-cy-sl'];
+            idy.forEach(id => { document.getElementById(id).value = s.cy_mm10; document.getElementById(id.replace('-sl','-val')).textContent = fmt(s.cy_mm10); });
+          }
+        }
+        if (s.n_arms !== undefined && document.activeElement.id !== 'spiral-arms-sl') {
+          document.getElementById('spiral-arms-sl').value = s.n_arms;
+          document.getElementById('spiral-arms-val').textContent = s.n_arms;
+        }
+        if (s.sparkle_density !== undefined && document.activeElement.id !== 'sparkd-sl') {
+          document.getElementById('sparkd-sl').value = s.sparkle_density;
+          document.getElementById('sparkd-val').textContent = Math.round(s.sparkle_density / 2.55) + '%';
+        }
+        if (s.warp_strength !== undefined && document.activeElement.id !== 'warpst-sl') {
+          document.getElementById('warpst-sl').value = s.warp_strength;
+          document.getElementById('warpst-val').textContent = Math.round(s.warp_strength / 2.55) + '%';
+        }
+        if (s.n_seeds !== undefined && document.activeElement.id !== 'nseeds-sl') {
+          document.getElementById('nseeds-sl').value = s.n_seeds;
+          document.getElementById('nseeds-val').textContent = s.n_seeds;
+        }
+        // Voronoi orbit/speed mirrors pscale/pspeed
+        if (s.perlin_scale_mm10 !== undefined && document.activeElement.id !== 'voronoi-orbit-sl') {
+          document.getElementById('voronoi-orbit-sl').value = s.perlin_scale_mm10;
+          document.getElementById('voronoi-orbit-val').textContent = (s.perlin_scale_mm10 / 10).toFixed(1) + ' mm';
+        }
+        if (s.perlin_speed_c100 !== undefined && document.activeElement.id !== 'voronoi-speed-sl') {
+          document.getElementById('voronoi-speed-sl').value = s.perlin_speed_c100;
+          document.getElementById('voronoi-speed-val').textContent = (s.perlin_speed_c100 / 400).toFixed(3) + ' u/s';
+        }
+        // Ripple/spiral mirrors for sine params
+        if (s.sine_period_mm10 !== undefined) {
+          const rIds = ['ripple-period-sl','spiral-pitch-sl'];
+          if (!rIds.includes(document.activeElement.id)) {
+            document.getElementById('ripple-period-sl').value = s.sine_period_mm10;
+            document.getElementById('ripple-period-val').textContent = (s.sine_period_mm10/10).toFixed(1)+' mm';
+            document.getElementById('spiral-pitch-sl').value = s.sine_period_mm10;
+            document.getElementById('spiral-pitch-val').textContent = (s.sine_period_mm10/10).toFixed(1)+' mm';
+          }
+          if (!['ripple-speed-sl','spiral-speed-sl'].includes(document.activeElement.id)) {
+            document.getElementById('ripple-speed-sl').value = s.sine_speed_c100;
+            document.getElementById('ripple-speed-val').textContent = (s.sine_speed_c100/100).toFixed(2)+' Hz';
+            document.getElementById('spiral-speed-sl').value = s.sine_speed_c100;
+            document.getElementById('spiral-speed-val').textContent = (s.sine_speed_c100/100).toFixed(2)+' Hz';
+          }
+        }
+        if (s.period_ms !== undefined && document.activeElement.id !== 'sparkle-period-sl') {
+          document.getElementById('sparkle-period-sl').value = s.period_ms;
+          document.getElementById('sparkle-period-val').textContent = (s.period_ms / 1000).toFixed(1) + 's';
         }
 
         // Palette

@@ -98,6 +98,42 @@ static volatile uint32_t s_prof_total_us   = 0;
 static uint8_t s_pattern_buf[MAX_LEDS * 3];
 
 // ---------------------------------------------------------------------------
+// Math helpers — integer-only, no FPU
+// ---------------------------------------------------------------------------
+
+// Integer square root (Babylonian), 5–6 iterations, exact for n < 2^32.
+static uint32_t isqrt32(uint32_t n) {
+    if (n == 0) return 0;
+    uint32_t x = n, y = (n + 1) >> 1;
+    while (y < x) { x = y; y = (x + n / x) >> 1; }
+    return x;
+}
+
+// Fast atan2 returning [0, 256) = [0°, 360°) CCW from +x axis.
+// Maps each 45° octant linearly to 32 units.  Max error < 1°.
+static uint8_t atan2_u8(int32_t y, int32_t x) {
+    if (x == 0 && y == 0) return 0;
+    int32_t ax = x < 0 ? -x : x;
+    int32_t ay = y < 0 ? -y : y;
+    // oct ∈ [0, 32]: linear approximation within the first octant (0–45°).
+    // Multiplier 32 so that 256 units = full circle (64 units = 90°).
+    uint8_t oct = (ax >= ay)
+        ? (uint8_t)(ay * 32 / (ax ? ax : 1))
+        : (uint8_t)(64 - ax * 32 / (ay ? ay : 1));
+    if (x >= 0 && y >= 0) return oct;
+    if (x <  0 && y >= 0) return (uint8_t)(128 - oct);
+    if (x <  0)           return (uint8_t)(128 + oct);
+    return (uint8_t)(0   - oct);  // x >= 0, y < 0 → wraps to 256-oct
+}
+
+// Pixel hash for sparkle — stable per-pixel phase offset.
+static inline uint8_t pixel_hash(int i) {
+    uint32_t h = (uint32_t)(i + 1) * 2654435761u;
+    h ^= h >> 16;
+    return (uint8_t)(h >> 8);
+}
+
+// ---------------------------------------------------------------------------
 // Palette lookup
 // ---------------------------------------------------------------------------
 
@@ -229,60 +265,166 @@ static void render_task(void *arg) {
         settings_t cur;
         settings_get(&cur);
 
-        if (cur.mode == MODE_PERLIN || cur.mode == MODE_SINE) {
+        if (cur.mode != MODE_FLASH) {
             uint32_t time_ms = (uint32_t)time_sync_get_ms();
-            // bright_256: combined pal_bright × max_bright in [0,255]
-            // (pal_bright+1)*(max_bright+1)>>8 gives exact 255 at full scale
             uint8_t max_bright = node_config_get_max_bright();
             uint8_t bright_256 = (uint8_t)(((uint16_t)cur.pal_bright * ((uint16_t)max_bright + 1)) >> 8);
             int n_leds = pixel_layout_count();
             if (n_leds > MAX_LEDS) n_leds = MAX_LEDS;
 
-            // Pre-compute per-frame sine wave constants (angle → Q15 sin/cos)
-            int16_t cos_q15 = 0, sin_q15_v = 0;
-            int16_t period_t = 1;
-            uint32_t sine_time_phase = 0;
-            int16_t scale_t = 1;
-            int     octaves = 1;
-            if (cur.mode == MODE_SINE) {
-                period_t = (int16_t)(cur.sine_period_mm10);
-                // angle_deg10 → Q15 sin/cos via 256-entry table
-                // idx = angle_deg10 * 256 / 3600  (256 entries = full circle)
-                uint8_t angle_idx = (uint8_t)((uint32_t)cur.sine_angle_deg10 * 256 / 3600);
-                sin_q15_v = s_sin_q15[angle_idx];
-                cos_q15   = s_sin_q15[(angle_idx + 64) & 0xFF];
-                // time_phase: 256 units = one full cycle
-                // time_phase = time_ms * speed_c100 * 256 / 100000
-                sine_time_phase = (uint32_t)(
-                    (uint64_t)(uint32_t)time_ms * cur.sine_speed_c100 * 256 / 100000);
-            } else {
-                scale_t = (int16_t)(cur.perlin_scale_mm10);
-                octaves = (int)cur.perlin_octaves;
+            // --- Per-frame constants shared across modes ---
+            int32_t period_t  = (int32_t)cur.sine_period_mm10;   // 0.1 mm
+            int32_t scale_t   = (int32_t)cur.perlin_scale_mm10;  // 0.1 mm
+            int     octaves   = (int)cur.perlin_octaves;
+            int32_t cx_t      = cur.cx_mm10;
+            int32_t cy_t      = cur.cy_mm10;
+
+            uint8_t angle_idx   = (uint8_t)((uint32_t)cur.sine_angle_deg10 * 256 / 3600);
+            int16_t sin_q15_v   = s_sin_q15[angle_idx];
+            int16_t cos_q15     = s_sin_q15[(angle_idx + 64) & 0xFF];
+            // time_phase: 256 units = one full period (for sine-speed modes)
+            uint32_t time_phase  = (uint32_t)((uint64_t)time_ms * cur.sine_speed_c100   * 256 / 100000);
+            // ptime_phase: same but driven by perlin_speed (for perlin/plasma/voronoi/ripple alts)
+            uint32_t ptime_phase = (uint32_t)((uint64_t)time_ms * cur.perlin_speed_c100 * 256 / 100000);
+
+            // Pre-compute Voronoi seed positions (only used in MODE_VORONOI)
+            static int32_t s_vseed_x[8], s_vseed_y[8];
+            if (cur.mode == MODE_VORONOI) {
+                uint8_t n = cur.n_seeds;
+                if (n < 2) n = 2;
+                uint8_t base = (uint8_t)ptime_phase;
+                for (int si = 0; si < n; si++) {
+                    uint8_t ang = (uint8_t)(base + (uint32_t)si * 256 / n);
+                    s_vseed_x[si] = cx_t + ((int32_t)s_sin_q15[(ang + 64) & 0xFF] * scale_t >> 15);
+                    s_vseed_y[si] = cy_t + ((int32_t)s_sin_q15[ang]               * scale_t >> 15);
+                }
             }
 
             int64_t t0 = esp_timer_get_time();
 
-            // Pass 1: evaluate noise or sine per pixel → uint8_t t in [0,255]
+            // Pass 1: evaluate pattern per pixel → s_t_buf[i] in [0,255]
             static uint8_t s_t_buf[MAX_LEDS];
             for (int i = 0; i < n_leds; i++) {
                 int16_t x_t, y_t;
-                if (!pixel_layout_get(i, &x_t, &y_t)) {
-                    s_t_buf[i] = 0;
-                    continue;
+                if (!pixel_layout_get(i, &x_t, &y_t)) { s_t_buf[i] = 0; continue; }
+
+                switch (cur.mode) {
+
+                case MODE_SINE: {
+                    // Traveling plane wave — same as before
+                    int32_t proj = ((int32_t)x_t * cos_q15 + (int32_t)y_t * sin_q15_v) >> 15;
+                    int32_t sp   = (period_t > 0) ? (proj * 256 / period_t) : 0;
+                    s_t_buf[i]   = s_sin_lut[(uint8_t)(sp - (int32_t)time_phase)];
+                    break;
                 }
-                if (cur.mode == MODE_SINE) {
-                    // Dot product projection in 0.1mm units using Q15 trig
-                    int32_t proj_t = (int32_t)(
-                        ((int32_t)x_t * cos_q15 + (int32_t)y_t * sin_q15_v) >> 15);
-                    // Spatial phase: 256 units = one period
-                    int32_t spatial_phase = (period_t > 0)
-                        ? (proj_t * 256 / period_t)
-                        : 0;
-                    // Table lookup: subtract time_phase to animate
-                    s_t_buf[i] = s_sin_lut[(uint8_t)(spatial_phase - (int32_t)sine_time_phase)];
-                } else {
+
+                case MODE_PERLIN:
                     s_t_buf[i] = perlin_sample(x_t, y_t, time_ms,
-                                               scale_t, cur.perlin_speed_c100, octaves);
+                                               (int16_t)scale_t, cur.perlin_speed_c100, octaves);
+                    break;
+
+                case MODE_PLASMA: {
+                    // 4 overlapping sine waves → interference (demoscene plasma)
+                    // Each wave has a different spatial direction; all share the time phase.
+                    uint8_t p1 = (uint8_t)((int32_t)x_t       * 256 / (scale_t ? scale_t : 1) - (int32_t)ptime_phase);
+                    uint8_t p2 = (uint8_t)((int32_t)y_t       * 256 / (scale_t ? scale_t : 1) - (int32_t)ptime_phase * 3 / 4);
+                    int32_t scale2 = scale_t * 2; if (scale2 == 0) scale2 = 1;
+                    uint8_t p3 = (uint8_t)(((int32_t)x_t + y_t) * 256 / scale2 - (int32_t)ptime_phase / 2);
+                    uint32_t r  = isqrt32((uint32_t)((int32_t)x_t * x_t) + (uint32_t)((int32_t)y_t * y_t));
+                    uint8_t p4  = (uint8_t)(r * 256 / (scale_t ? scale_t : 1) + (int32_t)ptime_phase / 3);
+                    int32_t v   = (int32_t)s_sin_lut[p1] + s_sin_lut[p2] + s_sin_lut[p3] + s_sin_lut[p4];
+                    s_t_buf[i]  = (uint8_t)(v / 4);
+                    break;
+                }
+
+                case MODE_RIPPLE: {
+                    // Concentric rings radiating from (cx, cy)
+                    int32_t dx  = (int32_t)x_t - cx_t;
+                    int32_t dy  = (int32_t)y_t - cy_t;
+                    uint32_t r  = isqrt32((uint32_t)(dx * dx) + (uint32_t)(dy * dy));
+                    int32_t sp  = (period_t > 0) ? ((int32_t)r * 256 / period_t) : 0;
+                    s_t_buf[i]  = s_sin_lut[(uint8_t)(sp - (int32_t)time_phase)];
+                    break;
+                }
+
+                case MODE_SPIRAL: {
+                    // Archimedean spiral: angle × n_arms + radial phase
+                    int32_t dx  = (int32_t)x_t - cx_t;
+                    int32_t dy  = (int32_t)y_t - cy_t;
+                    uint8_t ang = atan2_u8(dy, dx);                       // [0,256) = 2π
+                    uint32_t r  = isqrt32((uint32_t)(dx * dx) + (uint32_t)(dy * dy));
+                    uint8_t rp  = (uint8_t)((period_t > 0) ? (r * 256 / (uint32_t)period_t) : 0);
+                    uint8_t t_s = (uint8_t)((uint16_t)ang * cur.n_arms + rp - (uint8_t)time_phase);
+                    s_t_buf[i]  = s_sin_lut[t_s];
+                    break;
+                }
+
+                case MODE_SPARKLE: {
+                    // Per-pixel independent twinkle.
+                    // Active set re-randomises each period so the same pixels
+                    // don't always light up (epoch mixes pixel index with time).
+                    uint32_t period = cur.period_ms > 0 ? cur.period_ms : 1000;
+                    uint32_t epoch  = time_ms / period;
+                    uint32_t h32    = ((uint32_t)(i + 1) ^ (epoch * 1664525u + 1013904223u)) * 2654435761u;
+                    h32 ^= h32 >> 16;
+                    uint8_t h = (uint8_t)(h32 >> 8);
+                    if (h >= cur.sparkle_density) {
+                        s_t_buf[i] = 0;
+                    } else {
+                        // Phase offset from a second hash so peaks are not synchronised
+                        uint8_t h2    = (uint8_t)(h32 >> 16);
+                        uint32_t phase = (time_ms % period + (uint32_t)h2 * period / 256) % period;
+                        s_t_buf[i]    = s_sin_lut[(uint8_t)(phase * 256 / period)];
+                    }
+                    break;
+                }
+
+                case MODE_WARP: {
+                    // Domain-warped Perlin: displace sampling coords by two Perlin values.
+                    int32_t wx  = (int32_t)perlin_sample(x_t, y_t, time_ms,
+                                      (int16_t)scale_t, cur.perlin_speed_c100, octaves) - 128;
+                    int32_t wy  = (int32_t)perlin_sample((int16_t)(x_t + scale_t),
+                                      (int16_t)(y_t + scale_t), time_ms,
+                                      (int16_t)scale_t, cur.perlin_speed_c100, octaves) - 128;
+                    int32_t ws  = (int32_t)cur.warp_strength * scale_t / 256;
+                    int16_t wx2 = (int16_t)(x_t + wx * ws / 128);
+                    int16_t wy2 = (int16_t)(y_t + wy * ws / 128);
+                    s_t_buf[i]  = perlin_sample(wx2, wy2, time_ms,
+                                      (int16_t)scale_t, cur.perlin_speed_c100, octaves);
+                    break;
+                }
+
+                case MODE_STANDING: {
+                    // 2-D standing wave on rotated axes: sin(u/λ) × sin(v/λ)
+                    int32_t u   = ((int32_t)x_t *  cos_q15 + (int32_t)y_t * sin_q15_v) >> 15;
+                    int32_t v   = ((int32_t)x_t * -sin_q15_v + (int32_t)y_t * cos_q15) >> 15;
+                    int32_t su  = (int32_t)s_sin_lut[(uint8_t)(u * 256 / (period_t ? period_t : 1) - (int32_t)time_phase)] - 128;
+                    int32_t sv  = (int32_t)s_sin_lut[(uint8_t)(v * 256 / (period_t ? period_t : 1))] - 128;
+                    int32_t val = su * sv / 128 + 128;
+                    s_t_buf[i]  = (uint8_t)(val < 0 ? 0 : val > 255 ? 255 : val);
+                    break;
+                }
+
+                case MODE_VORONOI: {
+                    // Distance to nearest orbiting seed → cell shading
+                    uint8_t n       = cur.n_seeds;
+                    if (n < 2) n    = 2;
+                    uint32_t min_d2 = UINT32_MAX;
+                    for (int si = 0; si < n; si++) {
+                        int32_t ddx = (int32_t)x_t - s_vseed_x[si];
+                        int32_t ddy = (int32_t)y_t - s_vseed_y[si];
+                        uint32_t d2 = (uint32_t)(ddx * ddx) + (uint32_t)(ddy * ddy);
+                        if (d2 < min_d2) min_d2 = d2;
+                    }
+                    uint32_t dist   = isqrt32(min_d2);
+                    int32_t  vi     = 255 - (int32_t)dist * 255 / (scale_t ? scale_t : 1);
+                    s_t_buf[i]      = (uint8_t)(vi < 0 ? 0 : (vi > 255 ? 255 : vi));
+                    break;
+                }
+
+                default:
+                    s_t_buf[i] = 0;
+                    break;
                 }
             }
 
@@ -307,7 +449,6 @@ static void render_task(void *arg) {
 
             led_write_rgb(s_pattern_buf, n_leds);
 
-            // Rolling exponential average (α = 1/8)
             uint32_t loop_us    = (uint32_t)(t1 - t0);
             uint32_t palette_us = (uint32_t)(t2 - t1);
             uint32_t ct_us      = (uint32_t)(t3 - t2);
@@ -318,9 +459,13 @@ static void render_task(void *arg) {
             s_prof_total_us   = (s_prof_total_us   * 7 + total_us)   / 8;
 
             if ((s_frame_count & 0x3F) == 0) {
-                ESP_LOGI(TAG, "render [%s] noise/sine=%"PRIu32"µs palette=%"PRIu32"µs ct=%"PRIu32"µs total=%"PRIu32"µs leds=%d",
-                         cur.mode == MODE_SINE ? "sine" : "perlin",
-                         s_prof_perloop_us, s_prof_palette_us, s_prof_ct_us, s_prof_total_us, n_leds);
+                static const char *const mode_names[] = {
+                    "flash","sine","perlin","plasma","ripple",
+                    "spiral","sparkle","warp","standing","voronoi"
+                };
+                const char *mn = (cur.mode < 10) ? mode_names[cur.mode] : "?";
+                ESP_LOGI(TAG, "render [%s] pixel=%"PRIu32"µs palette=%"PRIu32"µs ct=%"PRIu32"µs total=%"PRIu32"µs leds=%d",
+                         mn, s_prof_perloop_us, s_prof_palette_us, s_prof_ct_us, s_prof_total_us, n_leds);
             }
         } else {
             // MODE_FLASH

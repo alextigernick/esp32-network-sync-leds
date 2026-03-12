@@ -31,6 +31,12 @@ static settings_t s_settings = {
     .perlin_scale_mm10 = 1000,  // 100.0 mm
     .perlin_speed_c100 = 400,   // 1.00 noise-units/s
     .perlin_octaves    = 3,
+    .cx_mm10           = 0,
+    .cy_mm10           = 0,
+    .n_arms            = 2,
+    .sparkle_density   = 128,
+    .warp_strength     = 128,
+    .n_seeds           = 4,
     .pal_colors        = { 0x000000, 0xFFFFFF, 0x000000, 0x000000 },
     .pal_pos           = { 0, 255, 128, 192 },
     .pal_n             = 2,     // black → white
@@ -52,7 +58,8 @@ void settings_encode(const settings_t *s, char *buf, int buf_size) {
              "&mode=%u&speriod=%lu&sangle=%ld&sspeed=%ld"
              "&pscale=%lu&pspeed=%ld&poct=%u"
              "&p0=%lu&p1=%lu&p2=%lu&p3=%lu&pc=%u&pbr=%u"
-             "&pp0=%u&pp1=%u&pp2=%u&pp3=%u&pbl=%u",
+             "&pp0=%u&pp1=%u&pp2=%u&pp3=%u&pbl=%u"
+             "&cx=%ld&cy=%ld&narms=%u&sparkd=%u&warpst=%u&nseeds=%u",
              s->flash_enabled ? 1 : 0,
              (unsigned long)s->period_ms,
              (unsigned)s->duty_percent,
@@ -69,7 +76,10 @@ void settings_encode(const settings_t *s, char *buf, int buf_size) {
              (unsigned)s->pal_n, (unsigned)s->pal_bright,
              (unsigned)s->pal_pos[0], (unsigned)s->pal_pos[1],
              (unsigned)s->pal_pos[2], (unsigned)s->pal_pos[3],
-             (unsigned)s->pal_blend);
+             (unsigned)s->pal_blend,
+             (long)s->cx_mm10, (long)s->cy_mm10,
+             (unsigned)s->n_arms, (unsigned)s->sparkle_density,
+             (unsigned)s->warp_strength, (unsigned)s->n_seeds);
 }
 
 bool settings_decode(const char *body, settings_t *out) {
@@ -105,7 +115,7 @@ bool settings_decode(const char *body, settings_t *out) {
     p = strstr(body, "mode=");
     if (p) {
         uint8_t v = (uint8_t)strtoul(p + 5, NULL, 10);
-        if (v <= 2) out->mode = v;
+        if (v <= 9) out->mode = v;
     }
 
     p = strstr(body, "speriod=");
@@ -161,6 +171,29 @@ bool settings_decode(const char *body, settings_t *out) {
     if (p) {
         uint8_t v = (uint8_t)strtoul(p + 4, NULL, 10);
         if (v <= 3) out->pal_blend = v;
+    }
+
+    p = strstr(body, "cx=");
+    if (p) out->cx_mm10 = (int32_t)strtol(p + 3, NULL, 10);
+    p = strstr(body, "cy=");
+    if (p) out->cy_mm10 = (int32_t)strtol(p + 3, NULL, 10);
+
+    p = strstr(body, "narms=");
+    if (p) {
+        uint8_t v = (uint8_t)strtoul(p + 6, NULL, 10);
+        if (v >= 1 && v <= 8) out->n_arms = v;
+    }
+
+    p = strstr(body, "sparkd=");
+    if (p) out->sparkle_density = (uint8_t)strtoul(p + 7, NULL, 10);
+
+    p = strstr(body, "warpst=");
+    if (p) out->warp_strength = (uint8_t)strtoul(p + 7, NULL, 10);
+
+    p = strstr(body, "nseeds=");
+    if (p) {
+        uint8_t v = (uint8_t)strtoul(p + 7, NULL, 10);
+        if (v >= 2 && v <= 8) out->n_seeds = v;
     }
 
     return true;

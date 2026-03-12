@@ -173,6 +173,8 @@ static esp_err_t handle_state(httpd_req_t *req) {
       ",\"r\":%u,\"g\":%u,\"b\":%u"
       ",\"mode\":%u,\"sine_period_mm10\":%lu,\"sine_angle_deg10\":%ld,\"sine_speed_c100\":%ld"
       ",\"perlin_scale_mm10\":%lu,\"perlin_speed_c100\":%ld,\"perlin_octaves\":%u"
+      ",\"cx_mm10\":%ld,\"cy_mm10\":%ld"
+      ",\"n_arms\":%u,\"sparkle_density\":%u,\"warp_strength\":%u,\"n_seeds\":%u"
       ",\"pal_n\":%u,\"pal_bright\":%u"
       ",\"pal0\":%lu,\"pal1\":%lu,\"pal2\":%lu,\"pal3\":%lu"
       ",\"palp0\":%u,\"palp1\":%u,\"palp2\":%u,\"palp3\":%u"
@@ -201,6 +203,9 @@ static esp_err_t handle_state(httpd_req_t *req) {
       (unsigned long)cfg.perlin_scale_mm10,
       (long)cfg.perlin_speed_c100,
       (unsigned)cfg.perlin_octaves,
+      (long)cfg.cx_mm10, (long)cfg.cy_mm10,
+      (unsigned)cfg.n_arms, (unsigned)cfg.sparkle_density,
+      (unsigned)cfg.warp_strength, (unsigned)cfg.n_seeds,
       (unsigned)cfg.pal_n, (unsigned)cfg.pal_bright,
       (unsigned long)cfg.pal_colors[0], (unsigned long)cfg.pal_colors[1],
       (unsigned long)cfg.pal_colors[2], (unsigned long)cfg.pal_colors[3],

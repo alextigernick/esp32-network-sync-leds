@@ -10,9 +10,16 @@
 //   3. Add it to the /state JSON and the web UI.
 // ---------------------------------------------------------------------------
 typedef enum {
-    MODE_FLASH   = 0,
-    MODE_SINE    = 1,
-    MODE_PERLIN  = 2,
+    MODE_FLASH    = 0,
+    MODE_SINE     = 1,
+    MODE_PERLIN   = 2,
+    MODE_PLASMA   = 3,  // multi-wave interference (demoscene)
+    MODE_RIPPLE   = 4,  // radial waves from a center point
+    MODE_SPIRAL   = 5,  // rotating Archimedean spiral arms
+    MODE_SPARKLE  = 6,  // per-pixel hash twinkle (starfield)
+    MODE_WARP     = 7,  // domain-warped Perlin noise (fluid/fire)
+    MODE_STANDING = 8,  // 2-D standing wave (Chladni figure)
+    MODE_VORONOI  = 9,  // animated Voronoi cell shading
 } led_mode_t;
 
 typedef struct {
@@ -35,7 +42,23 @@ typedef struct {
     int32_t  perlin_speed_c100; // temporal drift in 0.0025 noise-units/s (400 = 1.00)
     uint8_t  perlin_octaves;    // fBm octave count, 1–8
 
-    // Palette — used by MODE_SINE and MODE_PERLIN.
+    // Shared center point — used by MODE_RIPPLE, MODE_SPIRAL, MODE_VORONOI.
+    int32_t  cx_mm10;          // X center in 0.1 mm units
+    int32_t  cy_mm10;          // Y center in 0.1 mm units
+
+    // MODE_SPIRAL
+    uint8_t  n_arms;           // number of spiral arms, 1–8
+
+    // MODE_SPARKLE
+    uint8_t  sparkle_density;  // fraction of active pixels, 0–255 (255 = all)
+
+    // MODE_WARP (domain-warped noise)
+    uint8_t  warp_strength;    // warp displacement scale, 0–255
+
+    // MODE_VORONOI
+    uint8_t  n_seeds;          // number of orbiting seeds, 2–8
+
+    // Palette — used by all modes except MODE_FLASH.
     // Pattern brightness (0–1) is interpolated across pal_n colour stops.
     // pal_bright is an overall dimmer applied after lookup (0 = off, 255 = full).
     uint32_t pal_colors[4]; // packed 0x00RRGGBB, stops 0..pal_n-1
