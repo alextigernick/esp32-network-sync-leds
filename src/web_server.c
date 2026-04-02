@@ -92,12 +92,16 @@
 
 #include <string.h>
 #include <stdio.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 
 #include "led.h"
 #include "esp_http_client.h"
 #include "esp_http_server.h"
 #include "esp_https_server.h"
 #include "esp_log.h"
+#include "esp_netif.h"
 #include "esp_ota_ops.h"
 #include "esp_system.h"
 #include "esp_timer.h"
@@ -1063,6 +1067,93 @@ static esp_err_t handle_wifi_config_get(httpd_req_t *req) {
     return ESP_OK;
 }
 
+// ---- wifi_config UDP broadcast -----------------------------------------
+
+static uint32_t get_broadcast_addr(void) {
+    esp_netif_ip_info_t info;
+    esp_netif_t *sta = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    if (sta && esp_netif_get_ip_info(sta, &info) == ESP_OK && info.ip.addr != 0)
+        return info.ip.addr | ~info.netmask.addr;
+    esp_netif_t *ap = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
+    if (ap && esp_netif_get_ip_info(ap, &info) == ESP_OK && info.ip.addr != 0)
+        return info.ip.addr | ~info.netmask.addr;
+    return inet_addr("192.168.4.255");
+}
+
+/* Broadcast wifi creds body (ssid=...&pass=...) to all nodes on the subnet. */
+static void wifi_config_broadcast(const char *body) {
+    int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_IP);
+    if (sock < 0) return;
+    int bc = 1;
+    setsockopt(sock, SOL_SOCKET, SO_BROADCAST, &bc, sizeof(bc));
+    struct sockaddr_in dest = {
+        .sin_family      = AF_INET,
+        .sin_port        = htons(WIFI_CONFIG_UDP_PORT),
+        .sin_addr.s_addr = get_broadcast_addr(),
+    };
+    int len = (int)strlen(body);
+    for (int i = 0; i < SETTINGS_UDP_REPEATS; i++) {
+        sendto(sock, body, len, 0, (struct sockaddr *)&dest, sizeof(dest));
+        if (i < SETTINGS_UDP_REPEATS - 1)
+            vTaskDelay(pdMS_TO_TICKS(SETTINGS_UDP_REPEAT_DELAY_MS));
+    }
+    close(sock);
+}
+
+/* Listens for wifi cred broadcasts, saves, and reboots. */
+static void wifi_creds_udp_rx_task(void *arg) {
+    int sock = -1;
+    for (;;) {
+        if (sock < 0) {
+            sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_IP);
+            if (sock < 0) { vTaskDelay(pdMS_TO_TICKS(2000)); continue; }
+            int reuse = 1;
+            setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+            struct timeval tv = { .tv_sec = 1, .tv_usec = 0 };
+            setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+            struct sockaddr_in addr = {
+                .sin_family      = AF_INET,
+                .sin_port        = htons(WIFI_CONFIG_UDP_PORT),
+                .sin_addr.s_addr = htonl(INADDR_ANY),
+            };
+            if (bind(sock, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+                close(sock); sock = -1;
+                vTaskDelay(pdMS_TO_TICKS(2000)); continue;
+            }
+            ESP_LOGI(TAG, "wifi_creds udp rx ready on port %d", WIFI_CONFIG_UDP_PORT);
+        }
+
+        char buf[160];
+        int n = recv(sock, buf, sizeof(buf) - 1, 0);
+        if (n <= 0) { vTaskDelay(pdMS_TO_TICKS(10)); continue; }
+        buf[n] = '\0';
+
+        char ssid[33] = {0}, pass[65] = {0};
+        char *ps = strstr(buf, "ssid=");
+        if (ps) {
+            ps += 5;
+            char *end = strchr(ps, '&');
+            size_t l = end ? (size_t)(end - ps) : strlen(ps);
+            if (l >= sizeof(ssid)) l = sizeof(ssid) - 1;
+            memcpy(ssid, ps, l);
+        }
+        char *pp = strstr(buf, "pass=");
+        if (pp) {
+            pp += 5;
+            char *end = strchr(pp, '&');
+            size_t l = end ? (size_t)(end - pp) : strlen(pp);
+            if (l >= sizeof(pass)) l = sizeof(pass) - 1;
+            memcpy(pass, pp, l);
+        }
+        if (ssid[0] == '\0') continue;
+
+        ESP_LOGI(TAG, "wifi_creds udp rx: saving creds, rebooting");
+        node_config_save_wifi_creds(ssid, pass);
+        vTaskDelay(pdMS_TO_TICKS(500));
+        esp_restart();
+    }
+}
+
 // ---- /wifi_config POST -------------------------------------------------
 
 static esp_err_t handle_wifi_config_post(httpd_req_t *req) {
@@ -1106,60 +1197,13 @@ static esp_err_t handle_wifi_config_post(httpd_req_t *req) {
     }
 
     node_config_save_wifi_creds(ssid, pass);
-    ESP_LOGI(TAG, "WiFi credentials updated — rebooting");
+    ESP_LOGI(TAG, "WiFi credentials updated — broadcasting to peers, rebooting");
 
-    // Forward to all peers before rebooting, AP last.
-    // Order: non-AP peers → AP → self. This keeps the mesh up while all
-    // nodes receive the new credentials, regardless of which node handles
-    // the initial request.
-    if (do_forward) {
-        static char fwd_url[48];
-        peer_t peers[MAX_PEERS];
-        int n = discovery_get_peers(peers, MAX_PEERS);
-        int ap_idx = -1;
-
-        // Pass 1: forward to all non-AP peers.
-        for (int i = 0; i < n; i++) {
-            if (strcmp(peers[i].ip, AP_IP) == 0) { ap_idx = i; continue; }
-            snprintf(fwd_url, sizeof(fwd_url), "http://%s/wifi_config?fwd=0", peers[i].ip);
-            esp_http_client_config_t cfg = {
-                .url        = fwd_url,
-                .method     = HTTP_METHOD_POST,
-                .timeout_ms = SETTINGS_HTTP_TIMEOUT_MS,
-            };
-            esp_http_client_handle_t client = esp_http_client_init(&cfg);
-            esp_http_client_set_header(client, "Content-Type",
-                                       "application/x-www-form-urlencoded");
-            esp_http_client_set_post_field(client, body, (int)strlen(body));
-            esp_err_t err = esp_http_client_perform(client);
-            if (err != ESP_OK)
-                ESP_LOGW(TAG, "wifi_config fwd to %s failed: %s",
-                         peers[i].ip, esp_err_to_name(err));
-            esp_http_client_cleanup(client);
-        }
-
-        // Pass 2: forward to the AP last so it reboots after all STAs.
-        if (ap_idx >= 0) {
-            if (n > 1) vTaskDelay(pdMS_TO_TICKS(1500)); // let STAs save first
-            snprintf(fwd_url, sizeof(fwd_url), "http://%s/wifi_config?fwd=0", peers[ap_idx].ip);
-            esp_http_client_config_t cfg = {
-                .url        = fwd_url,
-                .method     = HTTP_METHOD_POST,
-                .timeout_ms = SETTINGS_HTTP_TIMEOUT_MS,
-            };
-            esp_http_client_handle_t client = esp_http_client_init(&cfg);
-            esp_http_client_set_header(client, "Content-Type",
-                                       "application/x-www-form-urlencoded");
-            esp_http_client_set_post_field(client, body, (int)strlen(body));
-            esp_err_t err = esp_http_client_perform(client);
-            if (err != ESP_OK)
-                ESP_LOGW(TAG, "wifi_config fwd to AP failed: %s", esp_err_to_name(err));
-            esp_http_client_cleanup(client);
-        }
-
-        // Give the AP time to save before we (the STA) drop off the network.
-        if (n > 0) vTaskDelay(pdMS_TO_TICKS(1500));
-    }
+    // Broadcast to all peers via UDP — works even when multicast-based discovery
+    // fails (e.g. external routers with AP isolation or multicast filtering).
+    // Receivers apply via wifi_creds_udp_rx_task and reboot independently.
+    if (do_forward)
+        wifi_config_broadcast(body);
 
     httpd_resp_set_status(req, "204 No Content");
     httpd_resp_send(req, NULL, 0);
@@ -1209,6 +1253,8 @@ static void register_routes(httpd_handle_t server) {
 }
 
 void web_server_start(void) {
+    xTaskCreate(wifi_creds_udp_rx_task, "wcreds_rx", 3072, NULL, 3, NULL);
+
     // ---- Plain HTTP on port 80 (normal UI, peer-to-peer settings forwarding) ----
     httpd_config_t http_cfg    = HTTPD_DEFAULT_CONFIG();
     http_cfg.stack_size        = 8192;

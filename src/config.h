@@ -55,3 +55,12 @@
 
 // HTTP timeout when forwarding settings to peers (ms)
 #define SETTINGS_HTTP_TIMEOUT_MS  1500
+
+// UDP broadcast port for settings sync
+#define SETTINGS_UDP_PORT           5002
+// UDP broadcast port for wifi credential updates
+#define WIFI_CONFIG_UDP_PORT        5003
+// How many times to repeat each broadcast (covers packet loss)
+#define SETTINGS_UDP_REPEATS        3
+// Delay between repeats (ms)
+#define SETTINGS_UDP_REPEAT_DELAY_MS  80

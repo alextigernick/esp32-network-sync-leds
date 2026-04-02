@@ -5,9 +5,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 
 #include "esp_http_client.h"
 #include "esp_log.h"
+#include "esp_netif.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
@@ -218,37 +222,41 @@ void settings_apply_local(const settings_t *s) {
 }
 
 // ---------------------------------------------------------------------------
-// Forward task — pushes settings to each peer via HTTP POST /settings
+// Subnet broadcast address — prefers STA interface, falls back to AP.
 // ---------------------------------------------------------------------------
 
-typedef struct {
-    char url[48];
-    char body[320];
-} fwd_peer_ctx_t;
-
-static void forward_peer_task(void *arg) {
-    fwd_peer_ctx_t *ctx = (fwd_peer_ctx_t *)arg;
-
-    esp_http_client_config_t cfg = {
-        .url        = ctx->url,
-        .method     = HTTP_METHOD_POST,
-        .timeout_ms = SETTINGS_HTTP_TIMEOUT_MS,
-    };
-    esp_http_client_handle_t client = esp_http_client_init(&cfg);
-    esp_http_client_set_header(client, "Content-Type",
-                               "application/x-www-form-urlencoded");
-    esp_http_client_set_post_field(client, ctx->body, (int)strlen(ctx->body));
-
-    esp_err_t err = esp_http_client_perform(client);
-    if (err != ESP_OK)
-        ESP_LOGW(TAG, "forward to %s failed: %s", ctx->url, esp_err_to_name(err));
-
-    esp_http_client_cleanup(client);
-    free(ctx);
-    vTaskDelete(NULL);
+static uint32_t get_broadcast_addr(void) {
+    esp_netif_ip_info_t info;
+    esp_netif_t *sta = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    if (sta && esp_netif_get_ip_info(sta, &info) == ESP_OK && info.ip.addr != 0)
+        return info.ip.addr | ~info.netmask.addr;
+    esp_netif_t *ap = esp_netif_get_handle_from_ifkey("WIFI_AP_DEF");
+    if (ap && esp_netif_get_ip_info(ap, &info) == ESP_OK && info.ip.addr != 0)
+        return info.ip.addr | ~info.netmask.addr;
+    return inet_addr("192.168.4.255"); // last-resort fallback
 }
 
+// ---------------------------------------------------------------------------
+// Forward task — broadcasts settings via UDP, repeated SETTINGS_UDP_REPEATS
+// times to cover packet loss.  Broadcast address is computed dynamically so
+// this works on both the ESP32 soft-AP subnet and external routers.
+// ---------------------------------------------------------------------------
+
 static void forward_task(void *arg) {
+    int sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_IP);
+    if (sock < 0) {
+        ESP_LOGE(TAG, "forward_task: socket() failed");
+        vTaskDelete(NULL);
+        return;
+    }
+    int bc = 1;
+    setsockopt(sock, SOL_SOCKET, SO_BROADCAST, &bc, sizeof(bc));
+
+    struct sockaddr_in dest = {
+        .sin_family = AF_INET,
+        .sin_port   = htons(SETTINGS_UDP_PORT),
+    };
+
     settings_t pending;
     char body[320];
 
@@ -262,23 +270,77 @@ static void forward_task(void *arg) {
             pending = newer;
 
         settings_encode(&pending, body, sizeof(body));
+        int len = (int)strlen(body);
+        dest.sin_addr.s_addr = get_broadcast_addr();
 
-        peer_t peers[MAX_PEERS];
-        int count = discovery_get_peers(peers, MAX_PEERS);
+        for (int i = 0; i < SETTINGS_UDP_REPEATS; i++) {
+            int sent = sendto(sock, body, len, 0,
+                              (struct sockaddr *)&dest, sizeof(dest));
+            if (sent < 0)
+                ESP_LOGW(TAG, "broadcast send %d failed", i);
+            if (i < SETTINGS_UDP_REPEATS - 1)
+                vTaskDelay(pdMS_TO_TICKS(SETTINGS_UDP_REPEAT_DELAY_MS));
+        }
+        ESP_LOGD(TAG, "broadcast settings x%d (%d bytes)", SETTINGS_UDP_REPEATS, len);
+    }
+}
 
-        for (int i = 0; i < count; i++) {
-            fwd_peer_ctx_t *ctx = malloc(sizeof(fwd_peer_ctx_t));
-            if (!ctx) {
-                ESP_LOGW(TAG, "forward: out of memory for peer %s", peers[i].ip);
+// ---------------------------------------------------------------------------
+// UDP listener — receives settings broadcasts from peers and applies locally.
+// ---------------------------------------------------------------------------
+
+static void udp_rx_task(void *arg) {
+    int sock = -1;
+
+    for (;;) {
+        if (sock < 0) {
+            sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_IP);
+            if (sock < 0) {
+                ESP_LOGW(TAG, "udp_rx: socket() failed, retrying");
+                vTaskDelay(pdMS_TO_TICKS(2000));
                 continue;
             }
-            snprintf(ctx->url, sizeof(ctx->url), "http://%s/settings?fwd=0", peers[i].ip);
-            memcpy(ctx->body, body, sizeof(ctx->body));
 
-            if (xTaskCreate(forward_peer_task, "fwd_peer", 4096, ctx, 3, NULL) != pdPASS) {
-                ESP_LOGW(TAG, "forward: failed to create task for peer %s", peers[i].ip);
-                free(ctx);
+            int reuse = 1;
+            setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+
+            struct timeval tv = { .tv_sec = 1, .tv_usec = 0 };
+            setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+            struct sockaddr_in bind_addr = {
+                .sin_family      = AF_INET,
+                .sin_port        = htons(SETTINGS_UDP_PORT),
+                .sin_addr.s_addr = htonl(INADDR_ANY),
+            };
+            if (bind(sock, (struct sockaddr *)&bind_addr, sizeof(bind_addr)) < 0) {
+                ESP_LOGW(TAG, "udp_rx: bind() failed, retrying");
+                close(sock);
+                sock = -1;
+                vTaskDelay(pdMS_TO_TICKS(2000));
+                continue;
             }
+            ESP_LOGI(TAG, "udp_rx: listening on port %d", SETTINGS_UDP_PORT);
+        }
+
+        char buf[320];
+        struct sockaddr_in src;
+        socklen_t srclen = sizeof(src);
+        int n = recvfrom(sock, buf, sizeof(buf) - 1, 0,
+                         (struct sockaddr *)&src, &srclen);
+        if (n <= 0) {
+            // timeout or transient error — keep looping
+            vTaskDelay(pdMS_TO_TICKS(10));
+            continue;
+        }
+        buf[n] = '\0';
+
+        settings_t s;
+        if (settings_decode(buf, &s)) {
+            settings_apply_local(&s);
+            ESP_LOGD(TAG, "udp_rx: applied settings from %s",
+                     inet_ntoa(src.sin_addr));
+        } else {
+            ESP_LOGW(TAG, "udp_rx: decode failed (n=%d)", n);
         }
     }
 }
@@ -352,4 +414,5 @@ void settings_sync_init(void) {
     s_mutex         = xSemaphoreCreateMutex();
     s_forward_queue = xQueueCreate(4, sizeof(settings_t));
     xTaskCreate(forward_task, "fwd_set", 4096, NULL, 3, &s_fwd_task_handle);
+    xTaskCreate(udp_rx_task,  "set_rx",  3072, NULL, 3, NULL);
 }
